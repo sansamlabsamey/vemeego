@@ -127,15 +127,15 @@ const TeamsCalendar: React.FC<TeamsCalendarProps> = ({ events, onEventClick }) =
     });
 
     return (
-      <div className="overflow-hidden">
-        <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50">
+      <div className="flex flex-col h-full">
+        <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50 flex-none">
           {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
             <div key={day} className="py-3 text-center text-sm font-semibold text-slate-500">
               {day}
             </div>
           ))}
         </div>
-        <div className="grid grid-cols-7 auto-rows-fr">
+        <div className="grid grid-cols-7 auto-rows-fr flex-1 overflow-y-auto">
           {days.map((day, idx) => {
             const dayEvents = getEventsForDay(day);
             const isCurrentMonth = isSameMonth(day, currentDate);
@@ -179,7 +179,7 @@ const TeamsCalendar: React.FC<TeamsCalendarProps> = ({ events, onEventClick }) =
     const hours = Array.from({ length: 24 }, (_, i) => i);
 
     return (
-      <div className="overflow-hidden flex flex-col h-[600px]">
+      <div className="overflow-hidden flex flex-col h-full">
         <div className="grid grid-cols-8 border-b border-slate-200 bg-slate-50 flex-none">
           <div className="p-4 border-r border-slate-200"></div>
           {days.map(day => (
@@ -250,7 +250,7 @@ const TeamsCalendar: React.FC<TeamsCalendarProps> = ({ events, onEventClick }) =
     const dayEvents = getEventsForDay(currentDate);
 
     return (
-      <div className="overflow-hidden flex flex-col h-[600px]">
+      <div className="overflow-hidden flex flex-col h-full">
         <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-center">
              <div className="text-center">
                 <div className="text-sm font-medium uppercase text-slate-500 mb-1">{format(currentDate, 'EEEE')}</div>
@@ -315,7 +315,7 @@ const TeamsCalendar: React.FC<TeamsCalendarProps> = ({ events, onEventClick }) =
   return (
     <div className="h-full flex flex-col">
       {renderHeader()}
-      <div className="flex-1">
+      <div className="flex-1 min-h-0">
         {view === 'month' && renderMonthView()}
         {view === 'week' && renderWeekView()}
         {view === 'day' && renderDayView()}
