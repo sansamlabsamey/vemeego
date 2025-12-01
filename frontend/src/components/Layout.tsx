@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { Link, useLocation, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, MessageSquare, FolderOpen, Settings, Video, LogOut, Sparkles, Menu, X, LucideIcon } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, FolderOpen, Settings, Video, LogOut, Sparkles, Menu, X, LucideIcon, Shield, Calendar } from 'lucide-react';
 import AgentView from './AgentView';
 
 interface SidebarItemProps {
@@ -102,10 +102,28 @@ const Layout = () => {
           </div>
 
           <nav className="space-y-2">
-            <SidebarItem icon={LayoutDashboard} label="Meetings" path="/dashboard" active={location.pathname === '/dashboard'} onClick={closeMobileMenu} />
-            <SidebarItem icon={MessageSquare} label="Chat" path="/chat" active={location.pathname === '/chat'} onClick={closeMobileMenu} />
-            <SidebarItem icon={FolderOpen} label="Files" path="/files" active={location.pathname === '/files'} onClick={closeMobileMenu} />
-            <SidebarItem icon={Settings} label="Settings" path="/settings" active={location.pathname === '/settings'} onClick={closeMobileMenu} />
+            {location.pathname.startsWith('/admindashboard') ? (
+              <>
+                <SidebarItem icon={Shield} label="Overview" path="/admindashboard" active={location.pathname === '/admindashboard'} onClick={closeMobileMenu} />
+                <SidebarItem icon={Settings} label="Settings" path="/settings" active={location.pathname === '/settings'} onClick={closeMobileMenu} />
+              </>
+            ) : location.pathname.startsWith('/orgdashboard') ? (
+              <>
+                <SidebarItem icon={LayoutDashboard} label="Dashboard" path="/orgdashboard" active={location.pathname === '/orgdashboard'} onClick={closeMobileMenu} />
+                <SidebarItem icon={Calendar} label="Calendar" path="/calendar" active={location.pathname === '/calendar'} onClick={closeMobileMenu} />
+                <SidebarItem icon={MessageSquare} label="Chat" path="/chat" active={location.pathname === '/chat'} onClick={closeMobileMenu} />
+                <SidebarItem icon={FolderOpen} label="Files" path="/files" active={location.pathname === '/files'} onClick={closeMobileMenu} />
+                <SidebarItem icon={Settings} label="Settings" path="/settings" active={location.pathname === '/settings'} onClick={closeMobileMenu} />
+              </>
+            ) : (
+              <>
+                <SidebarItem icon={LayoutDashboard} label="Meetings" path="/dashboard" active={location.pathname === '/dashboard'} onClick={closeMobileMenu} />
+                <SidebarItem icon={Calendar} label="Calendar" path="/calendar" active={location.pathname === '/calendar'} onClick={closeMobileMenu} />
+                <SidebarItem icon={MessageSquare} label="Chat" path="/chat" active={location.pathname === '/chat'} onClick={closeMobileMenu} />
+                <SidebarItem icon={FolderOpen} label="Files" path="/files" active={location.pathname === '/files'} onClick={closeMobileMenu} />
+                <SidebarItem icon={Settings} label="Settings" path="/settings" active={location.pathname === '/settings'} onClick={closeMobileMenu} />
+              </>
+            )}
           </nav>
         </div>
 
