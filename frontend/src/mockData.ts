@@ -5,7 +5,7 @@ export interface User {
   email: string;
   role: 'Admin' | 'Member';
   avatar: string;
-  status: 'Active' | 'Inactive';
+  status: 'Active' | 'Inactive' | 'Pending';
   isMuted?: boolean;
   isSpeaking?: boolean;
 }
@@ -90,7 +90,7 @@ export interface Meeting {
   start?: Date;
   end?: Date;
   participants: { id: string; name: string; avatar: string }[];
-  status: 'Live Now' | 'Upcoming';
+  status: 'Live Now' | 'Upcoming' | 'Completed';
 }
 
 export const MEETINGS: Meeting[] = [

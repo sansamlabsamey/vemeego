@@ -1,13 +1,39 @@
 
-import React from 'react';
-import { Link } from 'react-router-dom';
+import React, { useState, useRef, useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { 
   Video, Check, ArrowRight, Sparkles, Shield, Zap, Globe, 
   Users, MessageSquare, Mic, Play, Layout, Smartphone,
-  Twitter, Linkedin, Github, Facebook
+  Twitter, Linkedin, Github, Facebook, LogOut, Settings, LayoutDashboard, User as UserIcon
 } from 'lucide-react';
 
+import { useAuth } from '../contexts/AuthContext';
+
 const LandingPage = () => {
+  const { isAuthenticated, user, logout } = useAuth();
+  const navigate = useNavigate();
+  const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  const handleLogout = () => {
+    logout();
+    setShowDropdown(false);
+  };
+
   return (
     <div className="min-h-screen bg-white font-sans text-slate-900 selection:bg-indigo-100">
       {/* Navbar */}
@@ -27,12 +53,64 @@ const LandingPage = () => {
               <a href="#use-cases" className="hover:text-indigo-600 transition-colors">Use Cases</a>
               <a href="#pricing" className="hover:text-indigo-600 transition-colors">Pricing</a>
             </div>
-            <Link 
-              to="/login" 
-              className="px-6 py-2.5 rounded-full bg-slate-900 text-white text-sm font-medium hover:bg-indigo-600 transition-all shadow-lg hover:shadow-indigo-500/25"
-            >
-              Sign In
-            </Link>
+            
+            {isAuthenticated ? (
+              <div className="relative" ref={dropdownRef}>
+                <button 
+                  onClick={() => setShowDropdown(!showDropdown)}
+                  className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-full hover:bg-slate-100 transition-colors border border-transparent hover:border-slate-200"
+                >
+                  <span className="text-sm font-medium text-slate-700 hidden sm:block">
+                    {user?.user_name || 'User'}
+                  </span>
+                  <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 border border-indigo-200">
+                    <UserIcon size={16} />
+                  </div>
+                </button>
+
+                {showDropdown && (
+                  <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-100 py-2 animate-in fade-in zoom-in-95 duration-200">
+                    <div className="px-4 py-2 border-b border-slate-50 mb-1">
+                      <p className="text-sm font-semibold text-slate-900 truncate">{user?.user_name}</p>
+                      <p className="text-xs text-slate-500 truncate">{user?.email}</p>
+                    </div>
+                    
+                    <button 
+                      onClick={() => navigate('/dashboard')}
+                      className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-indigo-600 flex items-center gap-2 transition-colors"
+                    >
+                      <LayoutDashboard size={16} />
+                      Dashboard
+                    </button>
+                    
+                    <button 
+                      onClick={() => navigate('/dashboard')}
+                      className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-indigo-600 flex items-center gap-2 transition-colors"
+                    >
+                      <Settings size={16} />
+                      Settings
+                    </button>
+                    
+                    <div className="my-1 border-t border-slate-50" />
+                    
+                    <button 
+                      onClick={handleLogout}
+                      className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2 transition-colors"
+                    >
+                      <LogOut size={16} />
+                      Sign Out
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Link 
+                to="/login" 
+                className="px-6 py-2.5 rounded-full bg-slate-900 text-white text-sm font-medium hover:bg-indigo-600 transition-all shadow-lg hover:shadow-indigo-500/25"
+              >
+                Sign In
+              </Link>
+            )}
           </div>
         </div>
       </nav>
@@ -224,7 +302,7 @@ const LandingPage = () => {
               </div>
               <p className="text-slate-500 text-sm mb-8">Perfect for individuals and small projects.</p>
               <Link to="/signup" className="block w-full py-3 rounded-xl bg-slate-100 text-slate-700 font-semibold text-center hover:bg-slate-200 transition-colors mb-8">
-                Get Started
+                Start For Free
               </Link>
               <ul className="space-y-4 text-sm text-slate-600">
                 <li className="flex items-center gap-3"><Check size={16} className="text-green-500" /> Up to 40 minutes per meeting</li>
@@ -241,7 +319,7 @@ const LandingPage = () => {
               </div>
               <h3 className="text-xl font-bold text-slate-900 mb-2">Pro</h3>
               <div className="flex items-baseline gap-1 mb-6">
-                <span className="text-4xl font-bold text-slate-900">$12</span>
+                <span className="text-4xl font-bold text-slate-900">$20</span>
                 <span className="text-slate-500">/month</span>
               </div>
               <p className="text-slate-500 text-sm mb-8">For growing teams that need more power.</p>
@@ -250,7 +328,7 @@ const LandingPage = () => {
               </Link>
               <ul className="space-y-4 text-sm text-slate-600">
                 <li className="flex items-center gap-3"><Check size={16} className="text-indigo-600" /> Unlimited meeting duration</li>
-                <li className="flex items-center gap-3"><Check size={16} className="text-indigo-600" /> 150 participants</li>
+                <li className="flex items-center gap-3"><Check size={16} className="text-indigo-600" /> Upto 150 participants in webinar</li>
                 <li className="flex items-center gap-3"><Check size={16} className="text-indigo-600" /> Cloud recording (10GB)</li>
                 <li className="flex items-center gap-3"><Check size={16} className="text-indigo-600" /> Advanced AI Assistant</li>
                 <li className="flex items-center gap-3"><Check size={16} className="text-indigo-600" /> Custom branding</li>
@@ -261,17 +339,17 @@ const LandingPage = () => {
             <div className="p-8 rounded-3xl border border-slate-200 bg-white hover:border-indigo-200 transition-colors">
               <h3 className="text-xl font-bold text-slate-900 mb-2">Business</h3>
               <div className="flex items-baseline gap-1 mb-6">
-                <span className="text-4xl font-bold text-slate-900">$25</span>
+                <span className="text-4xl font-bold text-slate-900">$60</span>
                 <span className="text-slate-500">/month</span>
               </div>
               <p className="text-slate-500 text-sm mb-8">Advanced control and support for large orgs.</p>
               <Link to="/signup" className="block w-full py-3 rounded-xl bg-slate-100 text-slate-700 font-semibold text-center hover:bg-slate-200 transition-colors mb-8">
-                Contact Sales
+                Get Started
               </Link>
               <ul className="space-y-4 text-sm text-slate-600">
-                <li className="flex items-center gap-3"><Check size={16} className="text-green-500" /> 500 participants</li>
+                <li className="flex items-center gap-3"><Check size={16} className="text-green-500" /> Upto 500 participants in webinar</li>
                 <li className="flex items-center gap-3"><Check size={16} className="text-green-500" /> Unlimited cloud recording</li>
-                <li className="flex items-center gap-3"><Check size={16} className="text-green-500" /> SSO & Admin Dashboard</li>
+                <li className="flex items-center gap-3"><Check size={16} className="text-green-500" /> In-meeting AI assistant</li>
                 <li className="flex items-center gap-3"><Check size={16} className="text-green-500" /> Transcript translation</li>
                 <li className="flex items-center gap-3"><Check size={16} className="text-green-500" /> 24/7 Priority Support</li>
               </ul>

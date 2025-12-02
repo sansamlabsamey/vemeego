@@ -80,3 +80,6 @@ agenthub/agents/youtube/db
 android-sdk/ 
 
 .env
+
+# OpenMemory - IDE/Assistant specific rules
+.cursor/rules/openmemory.mdc
