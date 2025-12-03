@@ -19,6 +19,7 @@ const Login = () => {
   const [error, setError] = useState<string>("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [keepMeSignedIn, setKeepMeSignedIn] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const { login, isAuthenticated } = useAuth();
 
@@ -34,7 +35,7 @@ const Login = () => {
     setError("");
 
     try {
-      await login(email, password);
+      await login(email, password, keepMeSignedIn);
       // Navigation will be handled by the AuthContext or ProtectedRoute based on user status
       // But we can default to dashboard and let the router redirect if needed
       navigate("/dashboard");
@@ -162,6 +163,33 @@ const Login = () => {
                 >
                   {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                 </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <input
+                  id="keep-signed-in"
+                  name="keep-signed-in"
+                  type="checkbox"
+                  checked={keepMeSignedIn}
+                  onChange={(e) => setKeepMeSignedIn(e.target.checked)}
+                  className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                />
+                <label
+                  htmlFor="keep-signed-in"
+                  className="ml-2 block text-sm text-slate-700"
+                >
+                  Keep me signed in
+                </label>
+              </div>
+              <div className="text-sm">
+                <a
+                  href="#"
+                  className="font-medium text-indigo-600 hover:text-indigo-500"
+                >
+                  Forgot your password?
+                </a>
               </div>
             </div>
 

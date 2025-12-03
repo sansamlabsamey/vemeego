@@ -209,6 +209,7 @@ class UserSignIn(BaseModel):
 
     email: EmailStr
     password: str = Field(..., min_length=1)
+    keep_me_signed_in: bool = False
 
 
 class UserInvite(BaseModel):

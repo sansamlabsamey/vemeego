@@ -11,7 +11,7 @@ Handles all authentication-related API endpoints including:
 
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 security = HTTPBearer()
@@ -364,7 +364,7 @@ async def setup_organization(
 
 
 @router.post("/signin", response_model=TokenResponse)
-async def signin(signin_data: UserSignIn):
+async def signin(signin_data: UserSignIn, response: Response):
     """
     Sign in with email and password.
 
@@ -384,6 +384,17 @@ async def signin(signin_data: UserSignIn):
             email=signin_data.email,
             password=signin_data.password,
         )
+
+        # Set refresh token cookie if keep_me_signed_in is True
+        if signin_data.keep_me_signed_in and result.get("refresh_token"):
+            response.set_cookie(
+                key="refresh_token",
+                value=result["refresh_token"],
+                httponly=True,
+                secure=True,  # Set to True in production (requires HTTPS)
+                samesite="lax",
+                max_age=30 * 24 * 60 * 60,  # 30 days
+            )
 
         return TokenResponse(
             access_token=result["access_token"],
@@ -415,7 +426,10 @@ async def signout(current_user: dict = Depends(get_current_active_user)):
         # Extract token from current context (would need to be passed differently in production)
         await auth_service.signout("")
 
-        return {"message": "Signed out successfully"}
+        # Clear cookie on signout
+        response = Response(content='{"message": "Signed out successfully"}', media_type="application/json")
+        response.delete_cookie("refresh_token")
+        return response
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -424,7 +438,11 @@ async def signout(current_user: dict = Depends(get_current_active_user)):
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(refresh_data: RefreshTokenRequest):
+async def refresh_token(
+    refresh_data: RefreshTokenRequest,
+    request: Request,
+    response: Response,
+):
     """
     Refresh access token using refresh token.
 
@@ -434,8 +452,32 @@ async def refresh_token(refresh_data: RefreshTokenRequest):
     **No authentication required** (uses refresh token instead).
     """
     try:
+        # Check for refresh token in body first, then cookie
+        token_to_use = refresh_data.refresh_token
+        using_cookie = False
+
+        if not token_to_use or token_to_use == "cookie":
+            cookie_token = request.cookies.get("refresh_token")
+            if cookie_token:
+                token_to_use = cookie_token
+                using_cookie = True
+            elif not token_to_use:
+                 raise AuthenticationError("Refresh token is required")
+
         auth_service = AuthService()
-        result = await auth_service.refresh_token(refresh_data.refresh_token)
+        result = await auth_service.refresh_token(token_to_use)
+
+        # If we used a cookie or if we want to maintain the session, update the cookie
+        # This implements the sliding window (resets 30 days on every refresh)
+        if using_cookie and result.get("refresh_token"):
+             response.set_cookie(
+                key="refresh_token",
+                value=result["refresh_token"],
+                httponly=True,
+                secure=True,
+                samesite="lax",
+                max_age=30 * 24 * 60 * 60,  # 30 days
+            )
 
         # Get user data for response
         from app.core.supabase_client import get_admin_client, verify_user_token
@@ -458,6 +500,8 @@ async def refresh_token(refresh_data: RefreshTokenRequest):
             user=UserResponse(**user_response.data),
         )
     except AuthenticationError as e:
+        # If refresh fails and we were using a cookie, clear it
+        response.delete_cookie("refresh_token")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=e.message)
     except Exception as e:
         raise HTTPException(

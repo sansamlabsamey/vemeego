@@ -26,7 +26,7 @@ interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, keepMeSignedIn?: boolean) => Promise<void>;
   logout: () => void;
   setUser: (user: User | null) => void;
   refreshUser: () => Promise<void>;
@@ -49,6 +49,22 @@ interface AuthProviderProps {
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Helper to parse JWT expiry
+  const isTokenExpired = (token: string): boolean => {
+    try {
+      const base64Url = token.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(window.atob(base64).split('').map(function(c) {
+          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+      }).join(''));
+      
+      const { exp } = JSON.parse(jsonPayload);
+      return Date.now() >= exp * 1000;
+    } catch (e) {
+      return true;
+    }
+  };
 
   // Load user from localStorage on mount
   useEffect(() => {
@@ -92,7 +108,47 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         const storedToken = localStorage.getItem("access_token");
 
         if (storedUser && storedToken) {
-          setUser(JSON.parse(storedUser));
+          // Check if token is expired
+          if (isTokenExpired(storedToken)) {
+            console.log("Token expired, attempting refresh...");
+            // Attempt refresh
+            try {
+              // Try with stored refresh token first, then cookie (handled by backend if we send "cookie")
+              const storedRefreshToken = localStorage.getItem("refresh_token");
+              const refreshBody = { refresh_token: storedRefreshToken || "cookie" };
+
+              const refreshResponse = await fetch(API_ENDPOINTS.AUTH.REFRESH, {
+                 method: "POST",
+                 headers: {
+                   "Content-Type": "application/json",
+                 },
+                 body: JSON.stringify(refreshBody),
+              });
+
+              if (refreshResponse.ok) {
+                const data = await refreshResponse.json();
+                localStorage.setItem("access_token", data.access_token);
+                if (data.refresh_token) {
+                   localStorage.setItem("refresh_token", data.refresh_token);
+                }
+                localStorage.setItem("user", JSON.stringify(data.user));
+                setUser(data.user);
+                setIsLoading(false);
+                return;
+              } else {
+                 throw new Error("Refresh failed");
+              }
+            } catch (refreshError) {
+              console.error("Session expired:", refreshError);
+              localStorage.removeItem("user");
+              localStorage.removeItem("access_token");
+              localStorage.removeItem("refresh_token");
+              localStorage.removeItem("isAuthenticated");
+              setUser(null);
+            }
+          } else {
+            setUser(JSON.parse(storedUser));
+          }
         }
       } catch (error) {
         console.error("Error loading user from storage:", error);
@@ -107,14 +163,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     loadUser();
   }, []);
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string, keepMeSignedIn: boolean = false) => {
     try {
       const response = await fetch(API_ENDPOINTS.AUTH.SIGNIN, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, keep_me_signed_in: keepMeSignedIn }),
       });
 
       if (!response.ok) {
