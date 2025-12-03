@@ -3,6 +3,7 @@ import { Search, MessageSquare } from 'lucide-react';
 import { api } from '../utils/api';
 import { API_ENDPOINTS } from '../config';
 import { useAuth } from '../contexts/AuthContext';
+import { useRealtimeChannel } from '../hooks/useRealtimeChannel';
 
 interface Conversation {
   id: string;
@@ -41,9 +42,36 @@ const MessagingList: React.FC<MessagingListProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
 
+
+
   useEffect(() => {
     loadData();
   }, [user]);
+
+  // Listen for realtime updates to conversations
+  useRealtimeChannel({
+    channelName: user ? `user_conversations:${user.id}` : '',
+    subscriptions: user ? [
+      {
+        event: '*', // Listen for INSERT and UPDATE
+        table: 'conversations',
+        filter: `participant1_id=eq.${user.id}`,
+        callback: () => {
+          console.log('Conversation updated (participant1), reloading...');
+          loadData();
+        },
+      },
+      {
+        event: '*',
+        table: 'conversations',
+        filter: `participant2_id=eq.${user.id}`,
+        callback: () => {
+          console.log('Conversation updated (participant2), reloading...');
+          loadData();
+        },
+      },
+    ] : [],
+  });
 
   const loadData = async () => {
     if (!user?.organization_id) return;

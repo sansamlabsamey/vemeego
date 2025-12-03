@@ -16,7 +16,7 @@ import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
 import ReactMarkdown from 'react-markdown';
 import { api } from '../utils/api';
 import { API_ENDPOINTS } from '../config';
-import { useRealtimeChannel } from '../hooks/useRealtimeChannel';
+import { useRealtimeChannel, RealtimeSubscription } from '../hooks/useRealtimeChannel';
 import { useAuth } from '../contexts/AuthContext';
 
 interface Message {
@@ -56,6 +56,7 @@ interface ChatWindowProps {
 }
 
 const ChatWindow: React.FC<ChatWindowProps> = ({ conversationId, participant, onBack }) => {
+  console.log('🔄 ChatWindow rendering', { conversationId }); // Debug log
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
@@ -71,41 +72,135 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ conversationId, participant, on
 
   const channelName = conversationId ? `conversation:${conversationId}` : null;
 
-  const { sendBroadcast } = useRealtimeChannel({
-    channelName: channelName || '',
-    onMessage: async (payload) => {
-      if (payload.event === 'message' && payload.payload) {
-        const newMsg = payload.payload;
+  const handleBroadcast = React.useCallback((event: string, payload: any) => {
+    if (event === 'message' && payload) {
+       // Handle manual broadcast if we still use it
+    }
+  }, []);
+
+  const subscriptions = React.useMemo<RealtimeSubscription[]>(() => conversationId ? [
+    {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'messages',
+      filter: `conversation_id=eq.${conversationId}`,
+      callback: (payload: any) => {
+        const newMsg = payload.new;
+        console.log('📨 New message received:', newMsg.id);  // ✅ Debug log
+        
         // Avoid duplicates
         setMessages((prev) => {
           if (prev.find((m) => m.id === newMsg.id)) return prev;
           
           // If sender info is missing (from Postgres Changes), fetch it
-          if (!newMsg.sender_name && newMsg.sender_id && user) {
-            // For now, add it with a placeholder - we'll reload messages to get full data
-            // Or we could make an API call to get sender info, but reloading is simpler
-            return [...prev, { ...newMsg, sender_name: 'Loading...' }];
-          }
-          
-          return [...prev, newMsg];
+          // Always ensure sender_name is present to avoid render crashes
+          const messageWithSender = {
+            ...newMsg,
+            sender_name: newMsg.sender_name || 'Loading...',
+            reactions: [], // Initialize reactions
+          };
+
+          return [...prev, messageWithSender];
         });
         
         // If sender info is missing, reload messages to get full data
         if (!newMsg.sender_name && newMsg.sender_id) {
+          // Use a slight delay to ensure the API has the latest data
           setTimeout(() => {
             loadMessages();
-          }, 100);
+          }, 500);
         } else {
           scrollToBottom();
         }
-      } else if (payload.event === 'message_update' && payload.payload) {
-        // Handle message updates (edits, deletes)
-        const updatedMsg = payload.payload;
+      },
+    },
+    {
+      event: 'UPDATE',
+      table: 'messages',
+      filter: `conversation_id=eq.${conversationId}`,
+      callback: (payload: any) => {
+        const updatedMsg = payload.new;
         setMessages((prev) =>
           prev.map((msg) => (msg.id === updatedMsg.id ? { ...msg, ...updatedMsg } : msg))
         );
-      }
+      },
     },
+    {
+      event: 'INSERT',
+      table: 'message_reactions',
+      // No filter by conversation_id available on message_reactions table
+      // Rely on RLS and client-side filtering
+      callback: (payload: any) => {
+        const reaction = payload.new;
+        setMessages((prev) => 
+          prev.map((msg) => {
+            if (msg.id === reaction.message_id) {
+              // Check if reaction already exists to avoid duplicates
+              const exists = msg.reactions?.some(
+                (r) => r.user_id === reaction.user_id && r.emoji === reaction.emoji
+              );
+              if (exists) return msg;
+
+              return {
+                ...msg,
+                reactions: [...(msg.reactions || []), {
+                  id: reaction.id,
+                  user_id: reaction.user_id,
+                  user_name: '', // We don't have user_name here, will need to fetch or ignore
+                  emoji: reaction.emoji
+                }]
+              };
+            }
+            return msg;
+          })
+        );
+        // Ideally we should fetch the user details, but for now we'll just reload if needed
+        // or we can just show the reaction count without user names until reload
+      },
+    },
+    {
+      event: 'DELETE',
+      table: 'message_reactions',
+      callback: (payload: any) => {
+        const reaction = payload.old;
+        setMessages((prev) => 
+          prev.map((msg) => {
+            if (msg.id === reaction.message_id) {
+              return {
+                ...msg,
+                reactions: (msg.reactions || []).filter(
+                  (r) => !(r.user_id === reaction.user_id && r.emoji === reaction.emoji)
+                  // Note: payload.old might only contain ID if replica identity is default
+                  // If so, we might need to rely on ID if available, or reload
+                )
+              };
+            }
+            return msg;
+          })
+        );
+        // If we can't reliably delete locally (e.g. missing ID in payload), reload
+        if (!reaction.message_id) {
+           loadMessages(); 
+        }
+      },
+    },
+    {
+      event: '*',
+      table: 'pinned_messages',
+      filter: `conversation_id=eq.${conversationId}`,
+      callback: () => {
+        // Just reload messages to update pinned status if we were showing it
+        // Or if we had a pinned messages list, update that.
+        // For now, ChatWindow doesn't explicitly show pinned messages list, 
+        // but maybe we want to show a toast or something.
+      },
+    }
+  ] : [], [conversationId]);
+
+  const { sendBroadcast } = useRealtimeChannel({
+    channelName,
+    subscriptions,
+    onBroadcast: handleBroadcast
   });
 
 
@@ -123,7 +218,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ conversationId, participant, on
       const container = messagesContainerRef.current;
       const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
       if (isNearBottom) {
-        scrollToBottom();
+        // scrollToBottom();
       }
     }
   }, [messages]);
@@ -200,7 +295,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ conversationId, participant, on
       // Use a small delay to ensure DOM is updated
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          scrollToBottom();
+          // scrollToBottom();
         });
       });
     } catch (error) {
@@ -411,7 +506,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ conversationId, participant, on
                   >
                     {message.content_type === 'markdown' ? (
                       <div className={isOwn ? 'prose prose-invert prose-sm max-w-none' : 'prose prose-sm max-w-none'}>
-                        <ReactMarkdown>{message.content}</ReactMarkdown>
+                        {/* <ReactMarkdown>{message.content}</ReactMarkdown> */}
+                        <p className="whitespace-pre-wrap">{message.content}</p>
                       </div>
                     ) : (
                       <p className="whitespace-pre-wrap">{message.content}</p>
@@ -578,11 +674,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ conversationId, participant, on
 
       {/* Input Area */}
       <div className="p-4 bg-white/60 border-t border-slate-200 relative flex-shrink-0">
-        {showEmojiPicker && (
+        {/* {showEmojiPicker && (
           <div className="absolute bottom-full right-4 mb-2 z-50">
             <EmojiPicker onEmojiClick={onEmojiClick} />
           </div>
-        )}
+        )} */}
 
         <div className="flex gap-2">
           <button

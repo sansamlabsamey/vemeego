@@ -2,9 +2,18 @@ import { useEffect, useState, useRef } from 'react';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '../utils/supabase';
 
+export interface RealtimeSubscription {
+  event: 'INSERT' | 'UPDATE' | 'DELETE' | '*';
+  schema?: string;
+  table: string;
+  filter?: string;
+  callback: (payload: any) => void;
+}
+
 interface UseRealtimeChannelOptions {
   channelName: string;
-  onMessage?: (payload: any) => void;
+  subscriptions?: RealtimeSubscription[];
+  onBroadcast?: (event: string, payload: any) => void;
   onPresenceSync?: (state: any) => void;
   onPresenceJoin?: (key: string, currentPresences: any) => void;
   onPresenceLeave?: (key: string, leftPresences: any) => void;
@@ -12,7 +21,8 @@ interface UseRealtimeChannelOptions {
 
 export const useRealtimeChannel = ({
   channelName,
-  onMessage,
+  subscriptions = [],
+  onBroadcast,
   onPresenceSync,
   onPresenceJoin,
   onPresenceLeave,
@@ -21,8 +31,34 @@ export const useRealtimeChannel = ({
   const [isConnected, setIsConnected] = useState(false);
   const channelRef = useRef<RealtimeChannel | null>(null);
 
+  const subscriptionsRef = useRef(subscriptions);
+
+  useEffect(() => {
+    subscriptionsRef.current = subscriptions;
+  }, [subscriptions]);
+
+  const onBroadcastRef = useRef(onBroadcast);
+  const onPresenceSyncRef = useRef(onPresenceSync);
+  const onPresenceJoinRef = useRef(onPresenceJoin);
+  const onPresenceLeaveRef = useRef(onPresenceLeave);
+
+  useEffect(() => {
+    onBroadcastRef.current = onBroadcast;
+    onPresenceSyncRef.current = onPresenceSync;
+    onPresenceJoinRef.current = onPresenceJoin;
+    onPresenceLeaveRef.current = onPresenceLeave;
+  }, [onBroadcast, onPresenceSync, onPresenceJoin, onPresenceLeave]);
+
   useEffect(() => {
     if (!channelName || !supabase) return;
+
+    console.log('🔌 Setting up channel:', channelName); // Debug log
+
+    // Cleanup previous channel if it exists
+    if (channelRef.current) {
+      console.log('🧹 Cleaning up previous channel');
+      channelRef.current.unsubscribe();
+    }
 
     const newChannel = supabase.channel(channelName, {
       config: {
@@ -31,94 +67,66 @@ export const useRealtimeChannel = ({
       },
     });
 
-    // Subscribe to broadcast events (for manual broadcasts)
-    if (onMessage) {
-      newChannel.on('broadcast', { event: 'message' }, (payload) => {
-        onMessage(payload);
-      });
-    }
+    // Subscribe to broadcast events
+    newChannel.on('broadcast', { event: '*' }, (payload) => {
+      if (onBroadcastRef.current) {
+        onBroadcastRef.current(payload.event, payload.payload);
+      }
+    });
     
-    // Subscribe to Postgres Changes for messages table
-    // This listens for INSERT events on the messages table filtered by conversation_id
-    if (channelName.startsWith('conversation:')) {
-      const conversationId = channelName.replace('conversation:', '');
-      newChannel
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'messages',
-            filter: `conversation_id=eq.${conversationId}`,
-          },
-          (payload) => {
-            // Format the message similar to backend response
-            if (payload.new && onMessage) {
-              const message = payload.new;
-              // Fetch sender info if not included
-              onMessage({
-                event: 'message',
-                payload: {
-                  id: message.id,
-                  conversation_id: message.conversation_id,
-                  sender_id: message.sender_id,
-                  content: message.content,
-                  content_type: message.content_type,
-                  reply_to_id: message.reply_to_id,
-                  forwarded_from_id: message.forwarded_from_id,
-                  forwarded_from_user_id: message.forwarded_from_user_id,
-                  is_edited: message.is_edited,
-                  is_deleted: message.is_deleted,
-                  created_at: message.created_at,
-                  updated_at: message.updated_at,
-                  reactions: [],
-                },
-              });
-            }
+    // Subscribe to Postgres Changes
+    // We use the initial subscriptions config to set up the channel
+    // But inside the callback, we look up the matching subscription from the ref to get the latest callback
+    subscriptions.forEach(({ event, schema = 'public', table, filter }) => {
+      console.log(`📥 Subscribing to ${event} on ${table} with filter ${filter}`); // Debug log
+      newChannel.on(
+        'postgres_changes',
+        {
+          event,
+          schema,
+          table,
+          filter,
+        } as any,
+        (payload) => {
+          console.log(`📨 Received event ${event} on ${table}`); // Debug log
+          // Find the matching subscription in the latest refs to call the latest callback
+          const currentSub = subscriptionsRef.current.find(
+            (s) => 
+              s.event === event && 
+              s.table === table && 
+              (s.filter === filter || (!s.filter && !filter))
+          );
+          
+          if (currentSub && currentSub.callback) {
+            currentSub.callback(payload);
           }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: 'UPDATE',
-            schema: 'public',
-            table: 'messages',
-            filter: `conversation_id=eq.${conversationId}`,
-          },
-          (payload) => {
-            // Handle message updates (edits, deletes)
-            if (payload.new && onMessage) {
-              onMessage({
-                event: 'message_update',
-                payload: payload.new,
-              });
-            }
-          }
-        );
-    }
+        }
+      );
+    });
 
     // Subscribe to presence events
-    if (onPresenceSync) {
-      newChannel.on('presence', { event: 'sync' }, () => {
-        const state = newChannel.presenceState();
-        onPresenceSync(state);
-      });
-    }
+    newChannel.on('presence', { event: 'sync' }, () => {
+      const state = newChannel.presenceState();
+      if (onPresenceSyncRef.current) {
+        onPresenceSyncRef.current(state);
+      }
+    });
 
-    if (onPresenceJoin) {
-      newChannel.on('presence', { event: 'join' }, ({ key, currentPresences }) => {
-        onPresenceJoin(key, currentPresences);
-      });
-    }
+    newChannel.on('presence', { event: 'join' }, ({ key, currentPresences }) => {
+      if (onPresenceJoinRef.current) {
+        onPresenceJoinRef.current(key, currentPresences);
+      }
+    });
 
-    if (onPresenceLeave) {
-      newChannel.on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
-        onPresenceLeave(key, leftPresences);
-      });
-    }
+    newChannel.on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
+      if (onPresenceLeaveRef.current) {
+        onPresenceLeaveRef.current(key, leftPresences);
+      }
+    });
 
     // Subscribe to channel
     newChannel.subscribe((status) => {
+      console.log(`📡 Channel status for ${channelName}:`, status); // Debug log
       if (status === 'SUBSCRIBED') {
         setIsConnected(true);
         console.log('Connected to channel:', channelName);
@@ -133,12 +141,13 @@ export const useRealtimeChannel = ({
 
     return () => {
       if (channelRef.current) {
+        console.log('Unsubscribing from channel:', channelName);
         channelRef.current.unsubscribe();
         setChannel(null);
         setIsConnected(false);
       }
     };
-  }, [channelName, onMessage, onPresenceSync, onPresenceJoin, onPresenceLeave]);
+  }, [channelName, JSON.stringify(subscriptions.map(s => ({...s, callback: undefined})))]);
 
   const sendBroadcast = async (event: string, payload: any) => {
     if (!supabase) {

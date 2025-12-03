@@ -18,13 +18,5 @@ if (!SUPABASE_ANON_KEY || SUPABASE_ANON_KEY === '') {
 // Only create if both URL and key are provided
 export const supabase =
   SUPABASE_URL && SUPABASE_ANON_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-        realtime: {
-          params: {
-            eventsPerSecond: 10,
-          },
-        },
-      })
+    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
     : null;
-
-
