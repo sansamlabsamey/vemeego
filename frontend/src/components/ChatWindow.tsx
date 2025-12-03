@@ -11,13 +11,18 @@ import {
   Edit2,
   Check,
   X,
+  Paperclip,
+  File,
+  Loader2,
 } from 'lucide-react';
+import { useFileUpload } from '../hooks/useFileUpload';
 import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
 import ReactMarkdown from 'react-markdown';
 import { api } from '../utils/api';
 import { API_ENDPOINTS } from '../config';
 import { useRealtimeChannel, RealtimeSubscription } from '../hooks/useRealtimeChannel';
 import { useAuth } from '../contexts/AuthContext';
+import FileAttachment from './chat/FileAttachment';
 
 interface Message {
   id: string;
@@ -69,6 +74,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ conversationId, participant, on
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { uploadFile, uploading: isUploadingFile } = useFileUpload();
 
   const channelName = conversationId ? `conversation:${conversationId}` : null;
 
@@ -373,6 +380,74 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ conversationId, participant, on
     setShowEmojiPicker(false);
   };
 
+  const handleFileClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !conversationId) return;
+
+    try {
+      const timestamp = new Date().getTime();
+      const fileName = `${timestamp}_${file.name}`;
+      const path = `${conversationId}/${fileName}`;
+
+      const { publicUrl, path: storagePath, error } = await uploadFile({
+        bucketName: 'chat-files',
+        path,
+        file
+      });
+
+      if (error) throw error;
+
+      // Determine content type
+      const isImage = file.type.startsWith('image/');
+      const contentType = isImage ? 'image' : 'file';
+      
+      // For private buckets, we might need a signed URL, but useFileUpload returns publicUrl if public.
+      // Since chat-files is private, useFileUpload might return null for publicUrl if I didn't implement getPublicUrl for private.
+      // Wait, useFileUpload ONLY gets publicUrl for 'avatars'.
+      // So for chat-files, I should store the path or get a signed URL.
+      // But the message content usually stores the text/url.
+      // If I store the path, the frontend needs to sign it to display.
+      // Or I can generate a signed URL right away, but it expires.
+      // Better to store the path and let the frontend sign it on render, OR make the bucket public (but I made it private).
+      // If private, I need a way to view it.
+      // For now, I'll send the storage path as content and handle rendering.
+      
+      const messageContent = JSON.stringify({
+        path: storagePath,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        url: publicUrl // This will be null for private buckets in my current hook implementation
+      });
+
+      const messageData: any = {
+        conversation_id: conversationId,
+        content: messageContent,
+        content_type: contentType,
+      };
+
+      const response = await api.post(API_ENDPOINTS.MESSAGING.SEND_MESSAGE, messageData);
+      const sentMessage = response.data;
+
+      setMessages((prev) => {
+        if (prev.find((m) => m.id === sentMessage.id)) return prev;
+        return [...prev, sentMessage];
+      });
+      
+      scrollToBottom();
+    } catch (error) {
+      console.error('Failed to upload file:', error);
+    } finally {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
   const formatTime = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
@@ -506,8 +581,26 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ conversationId, participant, on
                   >
                     {message.content_type === 'markdown' ? (
                       <div className={isOwn ? 'prose prose-invert prose-sm max-w-none' : 'prose prose-sm max-w-none'}>
-                        {/* <ReactMarkdown>{message.content}</ReactMarkdown> */}
                         <p className="whitespace-pre-wrap">{message.content}</p>
+                      </div>
+                    ) : message.content_type === 'image' || message.content_type === 'file' ? (
+                      <div>
+                        {(() => {
+                          try {
+                            const fileData = JSON.parse(message.content);
+                            return (
+                              <FileAttachment 
+                                path={fileData.path} 
+                                name={fileData.name} 
+                                size={fileData.size} 
+                                type={fileData.type}
+                                bucket="chat-files"
+                              />
+                            );
+                          } catch (e) {
+                            return <p>{message.content}</p>;
+                          }
+                        })()}
                       </div>
                     ) : (
                       <p className="whitespace-pre-wrap">{message.content}</p>
@@ -686,6 +779,20 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ conversationId, participant, on
             className="p-2.5 hover:bg-slate-100 rounded-xl text-slate-600 transition-colors"
           >
             <Smile size={20} />
+          </button>
+
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileSelect}
+            className="hidden"
+          />
+          <button
+            onClick={handleFileClick}
+            disabled={isUploadingFile}
+            className="p-2.5 hover:bg-slate-100 rounded-xl text-slate-600 transition-colors disabled:opacity-50"
+          >
+            {isUploadingFile ? <Loader2 size={20} className="animate-spin" /> : <Paperclip size={20} />}
           </button>
 
           <div className="flex-1 relative">

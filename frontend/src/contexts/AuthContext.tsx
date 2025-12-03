@@ -19,6 +19,7 @@ export interface User {
   organization_name?: string;
   created_at: string;
   is_verified?: boolean;
+  url?: string;
 }
 
 interface AuthContextType {
