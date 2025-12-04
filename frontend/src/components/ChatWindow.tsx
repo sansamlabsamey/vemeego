@@ -100,6 +100,23 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     ? `conversation:${conversationId}:messages`
     : null;
 
+  // Scroll function (defined early so it can be used in other callbacks)
+  const scrollToBottom = React.useCallback(
+    (behavior: "smooth" | "auto" = "auto") => {
+      // Scroll the messages container directly instead of using scrollIntoView
+      // This prevents scrolling the entire page
+      if (messagesContainerRef.current) {
+        const container = messagesContainerRef.current;
+        // Use scrollTo instead of scrollTop for smoother scrolling and to prevent page scroll
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior,
+        });
+      }
+    },
+    []
+  );
+
   // Load messages function (defined before handleBroadcast to avoid hoisting issues)
   const loadMessages = React.useCallback(async () => {
     if (!conversationId) return;
@@ -111,13 +128,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       );
       setMessages(response.data || []);
       // Scroll to bottom after messages are loaded
-      setTimeout(() => scrollToBottom(), 100);
+      setTimeout(() => scrollToBottom("auto"), 100);
     } catch (error) {
       console.error("Failed to load messages:", error);
     } finally {
       setIsLoading(false);
     }
-  }, [conversationId]);
+  }, [conversationId, scrollToBottom]);
 
   // Handle Broadcast messages (replacing Postgres Changes)
   const handleBroadcast = React.useCallback(
@@ -133,24 +150,24 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           if (prev.find((m) => m.id === newMsg.id)) return prev;
 
           // Broadcast payload contains full message data from database trigger
-          // But sender_name might not be included, so we'll fetch if needed
+          // If sender_name is missing, use a placeholder or fetch it separately
+          // Don't reload all messages - just update this one message if needed
           const messageWithSender = {
             ...newMsg,
-            sender_name: newMsg.sender_name || "Loading...",
+            sender_name: newMsg.sender_name || participant?.user_name || "User",
             reactions: newMsg.reactions || [], // Initialize reactions
           };
 
           return [...prev, messageWithSender];
         });
 
-        // If sender info is missing, reload messages to get full data
-        if (!newMsg.sender_name && newMsg.sender_id) {
-          setTimeout(() => {
-            loadMessages();
-          }, 500);
-        } else {
-          scrollToBottom();
-        }
+        // Always scroll to bottom for new messages
+        // Use requestAnimationFrame to ensure DOM is updated before scrolling
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            scrollToBottom("auto");
+          });
+        });
       } else if (event === "message_updated" && payload) {
         const updatedMsg = payload;
         console.log("📨 Message updated via Broadcast:", updatedMsg.id);
@@ -162,7 +179,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         );
       }
     },
-    [loadMessages]
+    [participant, scrollToBottom]
   );
 
   // Keep Postgres Changes only for reactions and pinned messages
@@ -258,33 +275,35 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     } else {
       setMessages([]);
     }
-  }, [conversationId]);
+  }, [conversationId, loadMessages]);
+
+  // Track previous message count to detect new messages
+  const prevMessageCountRef = useRef(0);
 
   useEffect(() => {
-    // Only scroll if we're near the bottom (within 100px) or if it's a new message
+    // Auto-scroll when new messages arrive
     if (messagesContainerRef.current && messages.length > 0) {
       const container = messagesContainerRef.current;
+      const isNewMessage = messages.length > prevMessageCountRef.current;
       const isNearBottom =
         container.scrollHeight - container.scrollTop - container.clientHeight <
-        100;
-      if (isNearBottom) {
-        scrollToBottom();
-      }
-    }
-  }, [messages]);
+        200; // Increased threshold to 200px for better UX
 
-  const scrollToBottom = (behavior: "smooth" | "auto" = "smooth") => {
-    // Scroll the messages container directly instead of using scrollIntoView
-    // This prevents scrolling the entire page
-    if (messagesContainerRef.current) {
-      const container = messagesContainerRef.current;
-      // Use scrollTo instead of scrollTop for smoother scrolling and to prevent page scroll
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior,
-      });
+      // Always scroll if it's a new message and user is near bottom
+      // Or if user is already at the bottom
+      if (isNewMessage && (isNearBottom || container.scrollTop === 0)) {
+        // Use multiple requestAnimationFrame calls to ensure DOM is fully updated
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            scrollToBottom("auto");
+          });
+        });
+      }
+
+      // Update previous message count
+      prevMessageCountRef.current = messages.length;
     }
-  };
+  }, [messages, scrollToBottom]);
 
   const handleVideoCall = async () => {
     if (!conversationId || !participant) return;
@@ -564,15 +583,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     return date.toLocaleDateString();
   };
 
-  if (!conversationId || !participant) {
-    return (
-      <div className="flex-1 flex items-center justify-center bg-white/20">
-        <div className="text-center text-slate-500">
-          <p className="text-lg">Select a conversation to start messaging</p>
-        </div>
-      </div>
-    );
-  }
   if (!conversationId || !participant) {
     return (
       <div className="flex-1 flex items-center justify-center bg-white/20">
