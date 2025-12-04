@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     LIVEKIT_API_SECRET: str = ""
 
     # CORS Configuration
-    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
+    CORS_ORIGINS: str = "http://localhost:3000,https://vemeego.vercel.app/"
 
     @property
     def cors_origins_list(self) -> List[str]:

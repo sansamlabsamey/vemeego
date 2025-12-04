@@ -211,3 +211,32 @@ async def get_chat_messages(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get messages: {str(e)}",
         )
+
+class ParticipantStatusUpdate(BaseModel):
+    status: str  # "accepted" or "declined"
+
+@router.patch("/{meeting_id}/participants/{participant_id}/status", status_code=status.HTTP_200_OK)
+async def update_participant_status(
+    meeting_id: UUID,
+    participant_id: UUID,
+    status_update: ParticipantStatusUpdate,
+    current_user: dict = Depends(get_current_active_user),
+):
+    """
+    Update participant status (accept/decline meeting invitation).
+    """
+    try:
+        result = await meeting_service.update_participant_status(
+            meeting_id,
+            participant_id,
+            UUID(current_user["id"]),
+            status_update.status
+        )
+        return result
+    except AppException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update participant status: {str(e)}",
+        )

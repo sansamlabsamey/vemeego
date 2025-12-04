@@ -10,6 +10,7 @@ import OrganizationSetup from "./pages/OrganizationSetup";
 import CompleteOrganizationSetup from "./pages/CompleteOrganizationSetup";
 import PendingApproval from "./pages/PendingApproval";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { MeetingProvider } from "./contexts/MeetingContext";
 import IncomingCallOverlay from "./components/IncomingCallOverlay";
 
 // Simple Protected Route Component
@@ -54,8 +55,9 @@ function App() {
     <div className="App">
       <BrowserRouter>
         <AuthProvider>
-          <IncomingCallOverlay />
-          <Routes>
+          <MeetingProvider>
+            <IncomingCallOverlay />
+            <Routes>
             {/* Public Routes */}
             <Route path="/" element={<LandingPage />} />
             <Route path="/login" element={<Login />} />
@@ -93,7 +95,8 @@ function App() {
                 </ProtectedRoute>
               }
             />
-          </Routes>
+            </Routes>
+          </MeetingProvider>
         </AuthProvider>
       </BrowserRouter>
     </div>

@@ -327,3 +327,48 @@ class MeetingService:
         )
         
         return response.data or []
+
+    async def update_participant_status(
+        self,
+        meeting_id: UUID,
+        participant_id: UUID,
+        user_id: UUID,
+        new_status: str,
+    ) -> Dict[str, Any]:
+        """
+        Update participant status (accept/decline meeting invitation).
+        """
+        # Verify the participant belongs to the user
+        participant_response = (
+            self.admin_client.table("meeting_participants")
+            .select("*")
+            .eq("id", str(participant_id))
+            .eq("meeting_id", str(meeting_id))
+            .eq("user_id", str(user_id))
+            .single()
+            .execute()
+        )
+        
+        if not participant_response.data:
+            raise NotFoundError("Participant not found or access denied")
+        
+        # Validate status
+        if new_status not in ["accepted", "declined"]:
+            raise BadRequestError("Status must be 'accepted' or 'declined'")
+        
+        # Update status
+        update_data = {"status": new_status}
+        if new_status == "accepted":
+            update_data["joined_at"] = datetime.utcnow().isoformat()
+        
+        response = (
+            self.admin_client.table("meeting_participants")
+            .update(update_data)
+            .eq("id", str(participant_id))
+            .execute()
+        )
+        
+        if not response.data:
+            raise BadRequestError("Failed to update participant status")
+        
+        return response.data[0]

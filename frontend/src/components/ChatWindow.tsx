@@ -27,6 +27,8 @@ import {
 } from "../hooks/useRealtimeChannel";
 import { useAuth } from "../contexts/AuthContext";
 import FileAttachment from "./chat/FileAttachment";
+import OutgoingCallOverlay from "./OutgoingCallOverlay";
+import { supabase } from "../utils/supabase";
 
 interface Message {
   id: string;
@@ -81,6 +83,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [outgoingCall, setOutgoingCall] = useState<{
+    meetingId: string;
+    participantId: string;
+    participantName: string;
+    participantAvatar?: string;
+  } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -299,30 +307,51 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         start_time: new Date().toISOString(),
         type: "instant",
         participants: [
-          // Don't add participant here initially if we want to trigger the "invite" flow separately
-          // OR we can add them here and the backend should set status to 'invited' which triggers the hook?
-          // The backend create_meeting sets status to 'invited' for participants.
-          // So if we include them here, they should get the call.
           { user_id: participant.id, role: "attendee" }
         ]
       });
 
       const meeting = response.data;
-      const meetingLink = `${window.location.origin}/meeting/${meeting.id}`;
 
-      // Send meeting link as message
-      const messageData: any = {
-        conversation_id: conversationId,
-        content: `📞 Started a video call. [Join Meeting](${meetingLink})`,
-        content_type: "markdown",
-      };
+      // Wait a moment for the participant record to be created, then query for it
+      setTimeout(async () => {
+        try {
+          // Query for the participant record
+          const { data: participantData, error } = await supabase
+            .from('meeting_participants')
+            .select('id')
+            .eq('meeting_id', meeting.id)
+            .eq('user_id', participant.id)
+            .single();
 
-      await api.post(API_ENDPOINTS.MESSAGING.SEND_MESSAGE, messageData);
-      
-      // Navigate to meeting room
-      // window.open(meetingLink, '_blank'); // Optional: open in new tab
-      // For now, let the user click the link or we can navigate them
-      // navigate(`/meeting/${meeting.id}`); // Need useNavigate hook
+          if (error || !participantData) {
+            console.error("Failed to find participant record:", error);
+            // Still show the overlay, it will handle the case by matching user_id
+            setOutgoingCall({
+              meetingId: meeting.id,
+              participantId: participant.id, // Fallback to user_id
+              participantName: participant.user_name,
+              participantAvatar: undefined,
+            });
+          } else {
+            setOutgoingCall({
+              meetingId: meeting.id,
+              participantId: participantData.id,
+              participantName: participant.user_name,
+              participantAvatar: undefined,
+            });
+          }
+        } catch (err) {
+          console.error("Error fetching participant:", err);
+          // Show overlay with user_id as fallback
+          setOutgoingCall({
+            meetingId: meeting.id,
+            participantId: participant.id,
+            participantName: participant.user_name,
+            participantAvatar: undefined,
+          });
+        }
+      }, 300);
     } catch (error) {
       console.error("Failed to start video call:", error);
       alert("Failed to start video call");
@@ -567,16 +596,26 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   }
 
   return (
-    <div
-      className="flex-1 flex flex-col bg-white/20 relative h-full overflow-hidden"
-      style={{
-        height: "100%",
-        maxHeight: "100%",
-        position: "relative",
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
+    <>
+      {outgoingCall && (
+        <OutgoingCallOverlay
+          meetingId={outgoingCall.meetingId}
+          participantId={outgoingCall.participantId}
+          participantName={outgoingCall.participantName}
+          participantAvatar={outgoingCall.participantAvatar}
+          onCancel={() => setOutgoingCall(null)}
+        />
+      )}
+      <div
+        className="flex-1 flex flex-col bg-white/20 relative h-full overflow-hidden"
+        style={{
+          height: "100%",
+          maxHeight: "100%",
+          position: "relative",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
       {/* Header */}
       <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-white/40 backdrop-blur-md flex-shrink-0">
         <div className="flex items-center gap-3">
@@ -982,6 +1021,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         </div>
       </div>
     </div>
+    </>
   );
 };
 

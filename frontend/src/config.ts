@@ -40,6 +40,8 @@ export const API_ENDPOINTS = {
     LIST: `${API_BASE_URL}/meetings`,
     DETAIL: (id: string) => `${API_BASE_URL}/meetings/${id}`,
     TOKEN: (id: string) => `${API_BASE_URL}/meetings/${id}/token`,
+    UPDATE_PARTICIPANT_STATUS: (meetingId: string, participantId: string) => 
+      `${API_BASE_URL}/meetings/${meetingId}/participants/${participantId}/status`,
   },
 };
 
