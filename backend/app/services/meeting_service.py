@@ -54,14 +54,24 @@ class MeetingService:
             "room_name": f"room_{datetime.utcnow().timestamp()}", # Generate unique room name
         }
 
-        meeting_response = (
-            self.admin_client.table("meetings")
-            .insert(meeting_data)
-            .execute()
-        )
+        try:
+            meeting_response = (
+                self.admin_client.table("meetings")
+                .insert(meeting_data)
+                .execute()
+            )
 
-        if not meeting_response.data:
-            raise BadRequestError("Failed to create meeting")
+            if not meeting_response.data:
+                raise BadRequestError("Failed to create meeting")
+        except Exception as e:
+            # Re-raise with more context
+            error_msg = str(e)
+            if "does not exist" in error_msg.lower():
+                raise BadRequestError(
+                    f"Failed to create meeting: {error_msg}. "
+                    "The meetings table may not exist. Please ensure migrations have been run."
+                )
+            raise BadRequestError(f"Failed to create meeting: {error_msg}")
 
         meeting = meeting_response.data[0]
         meeting_id = meeting["id"]
@@ -73,7 +83,12 @@ class MeetingService:
             "role": "host",
             "status": "accepted",
         }
-        self.admin_client.table("meeting_participants").insert(host_participant).execute()
+        host_response = (
+            self.admin_client.table("meeting_participants")
+            .insert(host_participant)
+            .execute()
+        )
+        host_participant_data = host_response.data[0] if host_response.data else None
 
         # Add other participants and collect their IDs
         created_participants = []
@@ -101,8 +116,14 @@ class MeetingService:
                 )
                 created_participants = participants_response.data or []
 
+        # Build participants list (host + other participants)
+        all_participants = []
+        if host_participant_data:
+            all_participants.append(host_participant_data)
+        all_participants.extend(created_participants)
+        
         # Add participant IDs to meeting response for frontend
-        meeting["participants"] = created_participants
+        meeting["participants"] = all_participants
 
         return meeting
 
@@ -346,20 +367,56 @@ class MeetingService:
     ) -> Dict[str, Any]:
         """
         Update participant status (accept/decline meeting invitation).
+        participant_id can be either the participant record ID or a user_id (for lookup).
         """
-        # Verify the participant belongs to the user
-        participant_response = (
-            self.admin_client.table("meeting_participants")
-            .select("*")
-            .eq("id", str(participant_id))
-            .eq("meeting_id", str(meeting_id))
-            .eq("user_id", str(user_id))
-            .single()
-            .execute()
-        )
+        # First, try to find the participant record
+        # If participant_id looks like a UUID and matches a participant record, use it
+        # Otherwise, treat it as a user_id and look up the participant
+        participant = None
         
-        if not participant_response.data:
-            raise NotFoundError("Participant not found or access denied")
+        try:
+            # Try as participant record ID first
+            participant_response = (
+                self.admin_client.table("meeting_participants")
+                .select("*")
+                .eq("id", str(participant_id))
+                .eq("meeting_id", str(meeting_id))
+                .single()
+                .execute()
+            )
+            participant = participant_response.data
+        except:
+            # If that fails, try as user_id
+            try:
+                participant = await self.get_participant_by_user(meeting_id, UUID(participant_id))
+            except:
+                participant = None
+        
+        # If still not found, try direct user_id lookup
+        if not participant:
+            participant_response = (
+                self.admin_client.table("meeting_participants")
+                .select("*")
+                .eq("meeting_id", str(meeting_id))
+                .eq("user_id", str(participant_id))
+                .single()
+                .execute()
+            )
+            participant = participant_response.data if participant_response.data else None
+        
+        if not participant:
+            raise NotFoundError("Participant not found")
+        
+        # Verify the participant belongs to the user OR the user is the meeting host
+        # This allows hosts to cancel calls (update recipient status) and participants to accept/decline
+        meeting = await self.get_meeting(meeting_id, user_id)
+        is_participant_owner = str(participant["user_id"]) == str(user_id)
+        is_meeting_host = str(meeting["host_id"]) == str(user_id)
+        
+        if not (is_participant_owner or is_meeting_host):
+            raise AuthorizationError("You can only update your own participant status or if you are the meeting host")
+        
+        actual_participant_id = participant["id"]
         
         # Validate status
         if new_status not in ["accepted", "declined"]:
@@ -373,7 +430,7 @@ class MeetingService:
         response = (
             self.admin_client.table("meeting_participants")
             .update(update_data)
-            .eq("id", str(participant_id))
+            .eq("id", str(actual_participant_id))
             .execute()
         )
         
@@ -384,15 +441,69 @@ class MeetingService:
 
     async def get_invited_participants(self, user_id: UUID) -> List[Dict[str, Any]]:
         """
-        Get all meeting participants where the user is invited (status = 'invited').
+        Get recent meeting participants where the user is invited (status = 'invited').
+        Only returns invites from the last 5 minutes to avoid showing stale calls.
+        Only returns instant meetings (calls), not scheduled meetings.
         """
-        response = (
+        from datetime import timedelta
+        
+        # Only get invites from the last 5 minutes
+        five_minutes_ago = (datetime.utcnow() - timedelta(minutes=5)).isoformat()
+        
+        # First get all recent participants
+        participants_response = (
             self.admin_client.table("meeting_participants")
             .select("*")
             .eq("user_id", str(user_id))
             .eq("status", "invited")
-            .order("created_at", desc=False)
+            .gte("created_at", five_minutes_ago)
+            .order("created_at", desc=True)
             .execute()
         )
         
-        return response.data or []
+        participants = participants_response.data or []
+        if not participants:
+            return []
+        
+        # Get meeting IDs and fetch meetings to filter by type
+        meeting_ids = [p["meeting_id"] for p in participants]
+        
+        # Fetch meetings to check their type
+        meetings_response = (
+            self.admin_client.table("meetings")
+            .select("id, type")
+            .in_("id", meeting_ids)
+            .execute()
+        )
+        
+        # Create a map of meeting_id -> type
+        meeting_types = {m["id"]: m["type"] for m in (meetings_response.data or [])}
+        
+        # Filter to only include instant meetings (calls), not scheduled meetings
+        valid_participants = [
+            p for p in participants 
+            if meeting_types.get(p["meeting_id"]) == "instant"
+        ]
+        
+        return valid_participants
+
+    async def get_participant_by_user(
+        self,
+        meeting_id: UUID,
+        user_id: UUID,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get participant record by meeting_id and user_id.
+        """
+        try:
+            response = (
+                self.admin_client.table("meeting_participants")
+                .select("*")
+                .eq("meeting_id", str(meeting_id))
+                .eq("user_id", str(user_id))
+                .single()
+                .execute()
+            )
+            return response.data if response.data else None
+        except Exception:
+            return None

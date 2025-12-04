@@ -30,36 +30,49 @@ const OutgoingCallOverlay: React.FC<OutgoingCallOverlayProps> = ({
   useEffect(() => {
     if (!user || !meetingId) return;
 
-    // Subscribe to participant status updates
-    // We need to check both by participant ID and by user_id since we might have either
+    // CRITICAL: Ensure auth token is set on realtime connection BEFORE creating channel
+    // This is required for Broadcast authorization (private channels)
+    const accessToken = localStorage.getItem("access_token");
+    if (!accessToken || !supabase) {
+      console.error("❌ No access token or Supabase client available for outgoing call");
+      return;
+    }
+    
+    supabase.realtime.setAuth(accessToken);
+    console.log("🔐 Set auth token on realtime connection for outgoing call (before channel creation)");
+
+    // Subscribe to Broadcast channel for call status updates
+    // Channel format: meeting:{meetingId}:status (matches database trigger topic)
     const channel = supabase
-      .channel(`outgoing_call_${meetingId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'meeting_participants',
-          filter: `meeting_id=eq.${meetingId}`,
+      .channel(`meeting:${meetingId}:status`, {
+        config: {
+          broadcast: { self: false },
+          presence: { key: "" },
+          private: true, // Private channel for Broadcast authorization
         },
+      })
+      .on(
+        'broadcast',
+        { event: 'call_status_update' },
         async (payload) => {
-          const updatedParticipant = payload.new;
+          console.log("📞 Call status update broadcast received:", payload);
+          const statusData = payload.payload;
           
           // Check if this is the participant we're calling
           // participantId could be either the participant record ID or the user_id
           const isTargetParticipant = 
-            updatedParticipant.id === participantId || 
-            updatedParticipant.user_id === participantId;
+            statusData.participant_id === participantId || 
+            statusData.user_id === participantId;
           
           if (isTargetParticipant) {
-            if (updatedParticipant.status === 'accepted') {
+            if (statusData.status === 'accepted') {
               setCallStatus('accepted');
               // Navigate to meeting after a short delay
               setTimeout(() => {
                 navigate(`/meeting/${meetingId}`);
                 onCancel();
               }, 500);
-            } else if (updatedParticipant.status === 'declined') {
+            } else if (statusData.status === 'declined') {
               setCallStatus('declined');
               setTimeout(() => {
                 onCancel();
@@ -68,7 +81,14 @@ const OutgoingCallOverlay: React.FC<OutgoingCallOverlayProps> = ({
           }
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        console.log("📞 Outgoing call subscription status:", status, err);
+        if (status === "SUBSCRIBED") {
+          console.log("✅ Successfully subscribed to outgoing call status (Broadcast)");
+        } else if (status === "CHANNEL_ERROR") {
+          console.error("❌ Error subscribing to outgoing call status:", err);
+        }
+      });
 
     // Auto timeout after 1 minute
     timeoutRef.current = setTimeout(() => {
@@ -90,18 +110,9 @@ const OutgoingCallOverlay: React.FC<OutgoingCallOverlayProps> = ({
     // Update participant status to declined if still calling
     if (callStatus === 'calling') {
       try {
-        // Try to find the participant record if participantId is actually a user_id
-        const { data: participantData } = await supabase
-          .from('meeting_participants')
-          .select('id')
-          .eq('meeting_id', meetingId)
-          .eq('user_id', participantId)
-          .single();
-
-        const actualParticipantId = participantData?.id || participantId;
-        
+        // Backend API now handles both participant_id and user_id lookups
         await api.patch(
-          API_ENDPOINTS.MEETINGS.UPDATE_PARTICIPANT_STATUS(meetingId, actualParticipantId),
+          API_ENDPOINTS.MEETINGS.UPDATE_PARTICIPANT_STATUS(meetingId, participantId),
           { status: 'declined' }
         );
       } catch (error) {

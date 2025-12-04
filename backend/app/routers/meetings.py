@@ -232,6 +232,49 @@ async def get_invited_participants(
             detail=f"Failed to get invited participants: {str(e)}",
         )
 
+@router.get("/{meeting_id}/participants/by-user/{user_id}")
+async def get_participant_by_user(
+    meeting_id: UUID,
+    user_id: UUID,
+    current_user: dict = Depends(get_current_active_user),
+):
+    """
+    Get participant record by meeting_id and user_id.
+    Only accessible by the user themselves or the meeting host.
+    """
+    try:
+        # Verify access - user must be the requested user or the meeting host
+        meeting = await meeting_service.get_meeting(meeting_id, UUID(current_user["id"]))
+        
+        # Check if current user is the requested user or the host
+        if str(current_user["id"]) != str(user_id) and str(meeting["host_id"]) != str(current_user["id"]):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only view your own participant record or if you are the meeting host"
+            )
+        
+        participant = await meeting_service.get_participant_by_user(
+            meeting_id,
+            user_id
+        )
+        
+        if not participant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Participant not found"
+            )
+        
+        return participant
+    except HTTPException:
+        raise
+    except AppException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get participant: {str(e)}",
+        )
+
 class ParticipantStatusUpdate(BaseModel):
     status: str  # "accepted" or "declined"
 

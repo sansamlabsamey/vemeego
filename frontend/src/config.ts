@@ -43,6 +43,8 @@ export const API_ENDPOINTS = {
     UPDATE_PARTICIPANT_STATUS: (meetingId: string, participantId: string) => 
       `${API_BASE_URL}/meetings/${meetingId}/participants/${participantId}/status`,
     INVITED_PARTICIPANTS: `${API_BASE_URL}/meetings/participants/invited`,
+    GET_PARTICIPANT_BY_USER: (meetingId: string, userId: string) =>
+      `${API_BASE_URL}/meetings/${meetingId}/participants/by-user/${userId}`,
   },
 };
 

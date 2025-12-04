@@ -6,6 +6,7 @@ import React, {
   ReactNode,
 } from "react";
 import { API_ENDPOINTS } from "../config";
+import { authenticateSupabaseClient } from "../utils/supabase";
 
 export type UserRole = "super-admin" | "org-admin" | "user";
 
@@ -98,6 +99,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
               setUser(userData);
               localStorage.setItem("user", JSON.stringify(userData));
               localStorage.setItem("isAuthenticated", "true");
+              // Authenticate Supabase client for realtime subscriptions
+              authenticateSupabaseClient(accessToken, refreshToken || undefined);
               setIsLoading(false);
               return;
             }
@@ -133,6 +136,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
                 }
                 localStorage.setItem("user", JSON.stringify(data.user));
                 setUser(data.user);
+                // Authenticate Supabase client after token refresh
+                authenticateSupabaseClient(data.access_token, data.refresh_token);
                 setIsLoading(false);
                 return;
               } else {
@@ -148,6 +153,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             }
           } else {
             setUser(JSON.parse(storedUser));
+            // Authenticate Supabase client if user is already logged in
+            authenticateSupabaseClient(storedToken, localStorage.getItem("refresh_token") || undefined);
           }
         }
       } catch (error) {
@@ -187,6 +194,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
       localStorage.setItem("user", JSON.stringify(data.user));
       localStorage.setItem("isAuthenticated", "true");
+
+      // Authenticate Supabase client for realtime subscriptions
+      authenticateSupabaseClient(data.access_token, data.refresh_token);
 
       setUser(data.user);
     } catch (error) {

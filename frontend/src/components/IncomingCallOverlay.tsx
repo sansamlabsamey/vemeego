@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Phone, PhoneOff, Video, X } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { useMeeting } from "../contexts/MeetingContext";
-import { supabase } from "../utils/supabase";
+import { supabase, authenticateSupabaseClient } from "../utils/supabase";
 import { api } from "../utils/api";
 import { API_ENDPOINTS } from "../config";
 import Avatar from "./Avatar";
@@ -28,28 +28,57 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
   const [incomingCall, setIncomingCall] = useState<IncomingCallData | null>(
     null
   );
+  const [processedCallIds, setProcessedCallIds] = useState<Set<string>>(
+    new Set()
+  );
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !supabase) return;
 
-    // Check for existing invited participants on mount
-    const checkExistingInvites = async () => {
+    // Authenticate Supabase client with user's JWT token
+    // This is critical for RLS policies to work with Postgres Changes
+    const accessToken = localStorage.getItem("access_token");
+    const refreshToken = localStorage.getItem("refresh_token");
+
+    if (!accessToken) {
+      console.warn(
+        "⚠️ No access token found, Supabase client not authenticated"
+      );
+      return;
+    }
+
+    // Authenticate first, then set up subscription
+    // Use async to ensure auth completes before subscription
+    const setupSubscription = async () => {
       try {
-        // Use backend API instead of direct Supabase query to avoid RLS issues
-        const response = await api.get(
-          API_ENDPOINTS.MEETINGS.INVITED_PARTICIPANTS
+        await authenticateSupabaseClient(
+          accessToken,
+          refreshToken || undefined
         );
-        const participants = response.data || [];
+        console.log("🔐 Authenticated Supabase client for realtime");
 
-        if (participants.length > 0) {
-          // Get the most recent invite
-          const participant = participants[participants.length - 1];
-          await handleIncomingCall(participant);
+        // Wait a bit longer to ensure auth is fully propagated to realtime connection
+        // This is critical for Broadcast authorization to work correctly
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        // Double-check auth is set right before subscription
+        // CRITICAL: For private channels, auth must be set on realtime connection
+        const currentToken = localStorage.getItem("access_token");
+        if (currentToken && supabase) {
+          supabase.realtime.setAuth(currentToken);
+          console.log(
+            "🔐 Re-verified auth token right before subscription setup"
+          );
+          // Small delay after setting auth to ensure it's propagated
+          await new Promise((resolve) => setTimeout(resolve, 100));
         }
-      } catch (err) {
-        console.error("Failed to check existing invites:", err);
+
+        // Now set up the subscription
+        setupCallSubscription();
+      } catch (error) {
+        console.error("❌ Failed to authenticate Supabase client:", error);
       }
     };
 
@@ -96,48 +125,142 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
       }
     };
 
-    // Check for existing invites
-    checkExistingInvites();
+    let channelCleanup: (() => void) | null = null;
 
-    // Subscribe to meeting_participants table for new invites
-    const channel = supabase
-      .channel(`incoming_calls_${user.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "meeting_participants",
-          filter: `user_id=eq.${user.id}`,
-        },
-        async (payload) => {
-          console.log("📞 Incoming call payload received:", payload);
-          const newParticipant = payload.new;
-          if (newParticipant.status === "invited") {
+    const setupCallSubscription = () => {
+      if (!supabase) return;
+
+      // CRITICAL: Ensure auth token is set on realtime connection BEFORE creating channel
+      // This is required for Broadcast authorization (private channels)
+      const accessToken = localStorage.getItem("access_token");
+      if (!accessToken) {
+        console.error(
+          "❌ No access token available for realtime subscription!"
+        );
+        return;
+      }
+
+      // CRITICAL: Set auth on realtime connection RIGHT BEFORE creating the channel
+      // This must happen immediately before .channel() for private channels to work
+      // The token must be a valid Supabase JWT (which it is, since backend uses Supabase Auth)
+      try {
+        supabase.realtime.setAuth(accessToken);
+        console.log(
+          "🔐 Set auth token on realtime connection for incoming calls (before channel creation)"
+        );
+      } catch (authError) {
+        console.error("❌ Failed to set realtime auth:", authError);
+        return;
+      }
+
+      // Subscribe to Broadcast channel for call invitations
+      // Channel format: user:{user_id}:calls (matches database trigger topic)
+      const channel = supabase
+        .channel(`user:${user.id}:calls`, {
+          config: {
+            broadcast: { self: false },
+            presence: { key: "" },
+            private: true, // Private channel for Broadcast authorization
+          },
+        })
+        .on("broadcast", { event: "call_invitation" }, async (payload) => {
+          console.log("📞 Incoming call broadcast received:", payload);
+          const callData = payload.payload;
+
+          // Check if call data has required fields
+          if (
+            !callData ||
+            !callData.participant_id ||
+            !callData.meeting_id ||
+            !callData.user_id
+          ) {
+            console.error("📞 Invalid call data in broadcast:", callData);
+            return;
+          }
+
+          // Double-check user_id (should already be filtered by topic, but verify)
+          if (callData.user_id !== user.id) {
+            console.log(
+              "📞 Ignoring call for different user:",
+              callData.user_id,
+              "!=",
+              user.id
+            );
+            return;
+          }
+
+          // Only process if we haven't processed this call yet
+          if (!processedCallIds.has(callData.participant_id)) {
             console.log(
               "📞 Processing incoming call for participant:",
-              newParticipant.id
+              callData.participant_id
             );
-            await handleIncomingCall(newParticipant);
+            setProcessedCallIds((prev) =>
+              new Set(prev).add(callData.participant_id)
+            );
+
+            // Create participant object in the format expected by handleIncomingCall
+            const participant = {
+              id: callData.participant_id,
+              meeting_id: callData.meeting_id,
+              user_id: callData.user_id,
+              status: callData.status,
+            };
+
+            await handleIncomingCall(participant);
           } else {
             console.log(
-              "📞 Ignoring participant with status:",
-              newParticipant.status
+              "📞 Ignoring already processed call:",
+              callData.participant_id
             );
           }
-        }
-      )
-      .subscribe((status) => {
-        console.log("📞 Incoming call subscription status:", status);
-        if (status === "SUBSCRIBED") {
-          console.log("✅ Successfully subscribed to incoming calls");
-        } else if (status === "CHANNEL_ERROR") {
-          console.error("❌ Error subscribing to incoming calls");
-        }
-      });
+        })
+        .subscribe(async (status, err) => {
+          console.log("📞 Incoming call subscription status:", status, err);
+          if (status === "SUBSCRIBED") {
+            console.log(
+              "✅ Successfully subscribed to incoming calls (Broadcast)"
+            );
+          } else if (status === "CHANNEL_ERROR") {
+            console.error("❌ Error subscribing to incoming calls:", err);
+            // If authorization error, try re-authenticating
+            if (err && err.message && err.message.includes("Unauthorized")) {
+              console.log(
+                "🔄 Attempting to re-authenticate for private channel..."
+              );
+              const currentToken = localStorage.getItem("access_token");
+              if (currentToken && supabase) {
+                supabase.realtime.setAuth(currentToken);
+                // Try subscribing again after a short delay
+                setTimeout(() => {
+                  channel.subscribe();
+                }, 500);
+              }
+            }
+          } else if (status === "TIMED_OUT") {
+            console.error("❌ Subscription timed out");
+          } else if (status === "CLOSED") {
+            console.warn("⚠️ Subscription closed");
+          } else {
+            console.warn("⚠️ Unexpected subscription status:", status);
+          }
+        });
 
+      // Store cleanup function
+      channelCleanup = () => {
+        console.log("🧹 Cleaning up incoming calls channel");
+        supabase.removeChannel(channel);
+      };
+    };
+
+    // Start the async setup
+    setupSubscription();
+
+    // Cleanup function
     return () => {
-      supabase.removeChannel(channel);
+      if (channelCleanup) {
+        channelCleanup();
+      }
     };
   }, [user]);
 
@@ -163,6 +286,15 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
     }
 
     setIncomingCall(null);
+    // Clean up processed call IDs after a delay to prevent memory buildup
+    // Keep IDs for 10 minutes to prevent duplicate notifications
+    setTimeout(() => {
+      setProcessedCallIds((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(incomingCall?.participantId || "");
+        return newSet;
+      });
+    }, 10 * 60 * 1000); // 10 minutes
   }, [incomingCall, user]);
 
   useEffect(() => {

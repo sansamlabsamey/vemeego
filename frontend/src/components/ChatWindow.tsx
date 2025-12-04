@@ -28,7 +28,6 @@ import {
 import { useAuth } from "../contexts/AuthContext";
 import FileAttachment from "./chat/FileAttachment";
 import OutgoingCallOverlay from "./OutgoingCallOverlay";
-import { supabase } from "../utils/supabase";
 
 interface Message {
   id: string;
@@ -71,13 +70,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   participant,
   onBack,
 }) => {
-  console.log("🔄 ChatWindow rendering", { conversationId }); // Debug log
+  // console.log("🔄 ChatWindow rendering", { conversationId });
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [forwardingMessage, setForwardingMessage] = useState<Message | null>(
-    null,
+    null
   );
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -95,81 +94,95 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { uploadFile, uploading: isUploadingFile } = useFileUpload();
 
-  const channelName = `conversation:${conversationId}`;
+  // Channel name for Broadcast messages
+  // Format: conversation:{conversationId}:messages (matches database trigger topic)
+  const channelName = conversationId
+    ? `conversation:${conversationId}:messages`
+    : null;
 
-  const handleBroadcast = React.useCallback((event: string, payload: any) => {
-    if (event === "message" && payload) {
-      // Handle manual broadcast if we still use it
+  // Load messages function (defined before handleBroadcast to avoid hoisting issues)
+  const loadMessages = React.useCallback(async () => {
+    if (!conversationId) return;
+
+    try {
+      setIsLoading(true);
+      const response = await api.get(
+        API_ENDPOINTS.MESSAGING.MESSAGES(conversationId)
+      );
+      setMessages(response.data || []);
+      // Scroll to bottom after messages are loaded
+      setTimeout(() => scrollToBottom(), 100);
+    } catch (error) {
+      console.error("Failed to load messages:", error);
+    } finally {
+      setIsLoading(false);
     }
-  }, []);
+  }, [conversationId]);
 
+  // Handle Broadcast messages (replacing Postgres Changes)
+  const handleBroadcast = React.useCallback(
+    (event: string, payload: any) => {
+      console.log("📨 Broadcast received:", event, payload);
+
+      if (event === "message_inserted" && payload) {
+        const newMsg = payload;
+        console.log("📨 New message received via Broadcast:", newMsg.id);
+
+        // Avoid duplicates
+        setMessages((prev) => {
+          if (prev.find((m) => m.id === newMsg.id)) return prev;
+
+          // Broadcast payload contains full message data from database trigger
+          // But sender_name might not be included, so we'll fetch if needed
+          const messageWithSender = {
+            ...newMsg,
+            sender_name: newMsg.sender_name || "Loading...",
+            reactions: newMsg.reactions || [], // Initialize reactions
+          };
+
+          return [...prev, messageWithSender];
+        });
+
+        // If sender info is missing, reload messages to get full data
+        if (!newMsg.sender_name && newMsg.sender_id) {
+          setTimeout(() => {
+            loadMessages();
+          }, 500);
+        } else {
+          scrollToBottom();
+        }
+      } else if (event === "message_updated" && payload) {
+        const updatedMsg = payload;
+        console.log("📨 Message updated via Broadcast:", updatedMsg.id);
+
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === updatedMsg.id ? { ...msg, ...updatedMsg } : msg
+          )
+        );
+      }
+    },
+    [loadMessages]
+  );
+
+  // Keep Postgres Changes only for reactions and pinned messages
+  // (These are less frequent and can stay on Postgres Changes for now)
   const subscriptions = React.useMemo<RealtimeSubscription[]>(
     () =>
       conversationId
         ? [
             {
               event: "INSERT",
-              schema: "public",
-              table: "messages",
-              filter: `conversation_id=eq.${conversationId}`,
-              callback: (payload: any) => {
-                const newMsg = payload.new;
-                console.log("📨 New message received:", newMsg.id); // ✅ Debug log
-
-                // Avoid duplicates
-                setMessages((prev) => {
-                  if (prev.find((m) => m.id === newMsg.id)) return prev;
-
-                  // If sender info is missing (from Postgres Changes), fetch it
-                  // Always ensure sender_name is present to avoid render crashes
-                  const messageWithSender = {
-                    ...newMsg,
-                    sender_name: newMsg.sender_name || "Loading...",
-                    reactions: [], // Initialize reactions
-                  };
-
-                  return [...prev, messageWithSender];
-                });
-
-                // If sender info is missing, reload messages to get full data
-                if (!newMsg.sender_name && newMsg.sender_id) {
-                  // Use a slight delay to ensure the API has the latest data
-                  setTimeout(() => {
-                    loadMessages();
-                  }, 500);
-                } else {
-                  scrollToBottom();
-                }
-              },
-            },
-            {
-              event: "UPDATE",
-              table: "messages",
-              filter: `conversation_id=eq.${conversationId}`,
-              callback: (payload: any) => {
-                const updatedMsg = payload.new;
-                setMessages((prev) =>
-                  prev.map((msg) =>
-                    msg.id === updatedMsg.id ? { ...msg, ...updatedMsg } : msg,
-                  ),
-                );
-              },
-            },
-            {
-              event: "INSERT",
               table: "message_reactions",
-              // No filter by conversation_id available on message_reactions table
-              // Rely on RLS and client-side filtering
               callback: (payload: any) => {
                 const reaction = payload.new;
                 setMessages((prev) =>
                   prev.map((msg) => {
                     if (msg.id === reaction.message_id) {
-                      // Check if reaction already exists to avoid duplicates
                       const exists = msg.reactions?.some(
                         (r) =>
                           r.user_id === reaction.user_id &&
-                          r.emoji === reaction.emoji,
+                          r.emoji === reaction.emoji
                       );
                       if (exists) return msg;
 
@@ -180,17 +193,15 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                           {
                             id: reaction.id,
                             user_id: reaction.user_id,
-                            user_name: "", // We don't have user_name here, will need to fetch or ignore
+                            user_name: "",
                             emoji: reaction.emoji,
                           },
                         ],
                       };
                     }
                     return msg;
-                  }),
+                  })
                 );
-                // Ideally we should fetch the user details, but for now we'll just reload if needed
-                // or we can just show the reaction count without user names until reload
               },
             },
             {
@@ -208,16 +219,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                             !(
                               r.user_id === reaction.user_id &&
                               r.emoji === reaction.emoji
-                            ),
-                          // Note: payload.old might only contain ID if replica identity is default
-                          // If so, we might need to rely on ID if available, or reload
+                            )
                         ),
                       };
                     }
                     return msg;
-                  }),
+                  })
                 );
-                // If we can't reliably delete locally (e.g. missing ID in payload), reload
                 if (!reaction.message_id) {
                   loadMessages();
                 }
@@ -228,21 +236,20 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
               table: "pinned_messages",
               filter: `conversation_id=eq.${conversationId}`,
               callback: () => {
-                // Just reload messages to update pinned status if we were showing it
-                // Or if we had a pinned messages list, update that.
-                // For now, ChatWindow doesn't explicitly show pinned messages list,
-                // but maybe we want to show a toast or something.
+                // Reload messages to update pinned status
+                loadMessages();
               },
             },
           ]
         : [],
-    [conversationId],
+    [conversationId, loadMessages]
   );
 
   const { sendBroadcast } = useRealtimeChannel({
     channelName,
     subscriptions,
     onBroadcast: handleBroadcast,
+    isPrivate: true, // Broadcast messages use private channels (requires auth)
   });
 
   useEffect(() => {
@@ -266,24 +273,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   }, [messages]);
 
-  const loadMessages = async () => {
-    if (!conversationId) return;
-
-    try {
-      setIsLoading(true);
-      const response = await api.get(
-        API_ENDPOINTS.MESSAGING.MESSAGES(conversationId),
-      );
-      setMessages(response.data || []);
-      // Scroll to bottom after messages are loaded
-      setTimeout(() => scrollToBottom(), 100);
-    } catch (error) {
-      console.error("Failed to load messages:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const scrollToBottom = (behavior: "smooth" | "auto" = "smooth") => {
     // Scroll the messages container directly instead of using scrollIntoView
     // This prevents scrolling the entire page
@@ -306,9 +295,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         title: `Call with ${participant.user_name}`,
         start_time: new Date().toISOString(),
         type: "instant",
-        participants: [
-          { user_id: participant.id, role: "attendee" }
-        ]
+        participants: [{ user_id: participant.id, role: "attendee" }],
       });
 
       const meeting = response.data;
@@ -319,7 +306,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         (p: any) => p.user_id === participant.id
       );
 
-      if (participantRecord) {
+      if (participantRecord && participantRecord.id) {
         setOutgoingCall({
           meetingId: meeting.id,
           participantId: participantRecord.id,
@@ -327,14 +314,31 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           participantAvatar: undefined,
         });
       } else {
-        // Fallback: use user_id (OutgoingCallOverlay will handle finding the actual participant ID)
-        console.warn("Participant record not found in response, using user_id as fallback");
-        setOutgoingCall({
-          meetingId: meeting.id,
-          participantId: participant.id,
-          participantName: participant.user_name,
-          participantAvatar: undefined,
-        });
+        // Fallback: fetch participant ID from backend API
+        try {
+          const participantRes = await api.get(
+            API_ENDPOINTS.MEETINGS.GET_PARTICIPANT_BY_USER(
+              meeting.id,
+              participant.id
+            )
+          );
+          const fetchedParticipant = participantRes.data;
+          setOutgoingCall({
+            meetingId: meeting.id,
+            participantId: fetchedParticipant.id,
+            participantName: participant.user_name,
+            participantAvatar: undefined,
+          });
+        } catch (error) {
+          console.error("Failed to fetch participant ID:", error);
+          // Last resort: use user_id (backend will handle lookup)
+          setOutgoingCall({
+            meetingId: meeting.id,
+            participantId: participant.id,
+            participantName: participant.user_name,
+            participantAvatar: undefined,
+          });
+        }
       }
     } catch (error) {
       console.error("Failed to start video call:", error);
@@ -363,7 +367,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
       const response = await api.post(
         API_ENDPOINTS.MESSAGING.SEND_MESSAGE,
-        messageData,
+        messageData
       );
       const sentMessage = response.data;
 
@@ -410,8 +414,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         prev.map((msg) =>
           msg.id === editingMessage.id
             ? { ...msg, content: newMessage, is_edited: true }
-            : msg,
-        ),
+            : msg
+        )
       );
 
       setEditingMessage(null);
@@ -447,7 +451,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const handleRemoveReaction = async (messageId: string, emoji: string) => {
     try {
       await api.delete(
-        API_ENDPOINTS.MESSAGING.REMOVE_REACTION(messageId, emoji),
+        API_ENDPOINTS.MESSAGING.REMOVE_REACTION(messageId, emoji)
       );
       loadMessages(); // Reload to get updated reactions
     } catch (error) {
@@ -529,7 +533,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
       const response = await api.post(
         API_ENDPOINTS.MESSAGING.SEND_MESSAGE,
-        messageData,
+        messageData
       );
       const sentMessage = response.data;
 
@@ -600,411 +604,424 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           flexDirection: "column",
         }}
       >
-      {/* Header */}
-      <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-white/40 backdrop-blur-md flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="md:hidden p-2 -ml-2 hover:bg-slate-100 rounded-full text-slate-600"
-          >
-            <ArrowLeft size={20} />
-          </button>
-          <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm">
-            {participant.user_name.charAt(0).toUpperCase()}
+        {/* Header */}
+        <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-white/40 backdrop-blur-md flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onBack}
+              className="md:hidden p-2 -ml-2 hover:bg-slate-100 rounded-full text-slate-600"
+            >
+              <ArrowLeft size={20} />
+            </button>
+            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm">
+              {participant.user_name.charAt(0).toUpperCase()}
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-800">
+                {participant.user_name}
+              </h3>
+              <span className="text-xs text-green-600 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />{" "}
+                Online
+              </span>
+            </div>
           </div>
-          <div>
-            <h3 className="font-bold text-slate-800">
-              {participant.user_name}
-            </h3>
-            <span className="text-xs text-green-600 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-500" /> Online
-            </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleVideoCall}
+              className="p-2 hover:bg-indigo-100 rounded-full text-indigo-600"
+              title="Start Video Call"
+            >
+              <Video size={20} />
+            </button>
+            <button className="p-2 hover:bg-slate-100 rounded-full text-slate-600">
+              <MoreVertical size={20} />
+            </button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleVideoCall}
-            className="p-2 hover:bg-indigo-100 rounded-full text-indigo-600"
-            title="Start Video Call"
-          >
-            <Video size={20} />
-          </button>
-          <button className="p-2 hover:bg-slate-100 rounded-full text-slate-600">
-            <MoreVertical size={20} />
-          </button>
-        </div>
-      </div>
 
-      {/* Messages */}
-      <div
-        ref={messagesContainerRef}
-        className="flex-1 p-6 overflow-y-auto space-y-4 min-h-0"
-        style={{
-          scrollBehavior: "auto",
-          overscrollBehavior: "contain",
-          maxHeight: "100%",
-          overflowAnchor: "none",
-          WebkitOverflowScrolling: "touch",
-          position: "relative",
-        }}
-        onScroll={(e) => {
-          // Prevent scroll from bubbling up to parent
-          e.stopPropagation();
-        }}
-      >
-        {isLoading ? (
-          <div className="flex justify-center py-8">
-            <div className="w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="text-center text-slate-500 py-8">
-            <p>No messages yet. Start the conversation!</p>
-          </div>
-        ) : (
-          messages.map((message) => {
-            const isOwn = message.sender_id === user?.id;
-            const hasReactions =
-              message.reactions && message.reactions.length > 0;
+        {/* Messages */}
+        <div
+          ref={messagesContainerRef}
+          className="flex-1 p-6 overflow-y-auto space-y-4 min-h-0"
+          style={{
+            scrollBehavior: "auto",
+            overscrollBehavior: "contain",
+            maxHeight: "100%",
+            overflowAnchor: "none",
+            WebkitOverflowScrolling: "touch",
+            position: "relative",
+          }}
+          onScroll={(e) => {
+            // Prevent scroll from bubbling up to parent
+            e.stopPropagation();
+          }}
+        >
+          {isLoading ? (
+            <div className="flex justify-center py-8">
+              <div className="w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
+            </div>
+          ) : messages.length === 0 ? (
+            <div className="text-center text-slate-500 py-8">
+              <p>No messages yet. Start the conversation!</p>
+            </div>
+          ) : (
+            messages.map((message) => {
+              const isOwn = message.sender_id === user?.id;
+              const hasReactions =
+                message.reactions && message.reactions.length > 0;
 
-            return (
-              <div
-                key={message.id}
-                className={`flex gap-3 group ${isOwn ? "flex-row-reverse" : ""}`}
-                onMouseEnter={() => setSelectedMessage(message)}
-                onMouseLeave={() => setSelectedMessage(null)}
-              >
-                {!isOwn && (
-                  <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xs flex-shrink-0">
-                    {message.sender_name.charAt(0).toUpperCase()}
-                  </div>
-                )}
-
+              return (
                 <div
-                  className={`max-w-md ${isOwn ? "items-end" : "items-start"} flex flex-col`}
+                  key={message.id}
+                  className={`flex gap-3 group ${
+                    isOwn ? "flex-row-reverse" : ""
+                  }`}
+                  onMouseEnter={() => setSelectedMessage(message)}
+                  onMouseLeave={() => setSelectedMessage(null)}
                 >
                   {!isOwn && (
-                    <span className="text-xs text-slate-500 mb-1">
-                      {message.sender_name}
-                    </span>
-                  )}
-
-                  {/* Reply Preview */}
-                  {message.reply_to_content && (
-                    <div className="mb-1 p-2 bg-slate-100 rounded-lg border-l-4 border-indigo-500 text-xs text-slate-600">
-                      <div className="font-semibold">
-                        {message.reply_to_sender_name || "User"}
-                      </div>
-                      <div className="truncate">{message.reply_to_content}</div>
+                    <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xs flex-shrink-0">
+                      {message.sender_name.charAt(0).toUpperCase()}
                     </div>
                   )}
 
-                  {/* Forwarded Label */}
-                  {message.forwarded_from_user_name && (
-                    <div className="mb-1 text-xs text-slate-500 flex items-center gap-1">
-                      <Forward size={12} />
-                      Forwarded from {message.forwarded_from_user_name}
-                    </div>
-                  )}
-
-                  {/* Message Content */}
                   <div
-                    className={`p-3 rounded-2xl shadow-sm ${
-                      isOwn
-                        ? "bg-indigo-600 text-white rounded-tr-none"
-                        : "bg-white text-slate-700 rounded-tl-none"
-                    }`}
+                    className={`max-w-md ${
+                      isOwn ? "items-end" : "items-start"
+                    } flex flex-col`}
                   >
-                    {message.content_type === "markdown" ? (
-                      <div
-                        className={
-                          isOwn
-                            ? "prose prose-invert prose-sm max-w-none"
-                            : "prose prose-sm max-w-none"
-                        }
-                      >
-                        <p className="whitespace-pre-wrap">{message.content}</p>
-                      </div>
-                    ) : message.content_type === "image" ||
-                      message.content_type === "file" ? (
-                      <div>
-                        {(() => {
-                          try {
-                            const fileData = JSON.parse(message.content);
-                            return (
-                              <FileAttachment
-                                path={fileData.path}
-                                name={fileData.name}
-                                size={fileData.size}
-                                type={fileData.type}
-                                bucket="chat-files"
-                              />
-                            );
-                          } catch (e) {
-                            return <p>{message.content}</p>;
-                          }
-                        })()}
-                      </div>
-                    ) : (
-                      <p className="whitespace-pre-wrap">{message.content}</p>
+                    {!isOwn && (
+                      <span className="text-xs text-slate-500 mb-1">
+                        {message.sender_name}
+                      </span>
                     )}
 
-                    {message.is_edited && (
-                      <span className="text-xs opacity-70 ml-2">(edited)</span>
+                    {/* Reply Preview */}
+                    {message.reply_to_content && (
+                      <div className="mb-1 p-2 bg-slate-100 rounded-lg border-l-4 border-indigo-500 text-xs text-slate-600">
+                        <div className="font-semibold">
+                          {message.reply_to_sender_name || "User"}
+                        </div>
+                        <div className="truncate">
+                          {message.reply_to_content}
+                        </div>
+                      </div>
                     )}
-                  </div>
 
-                  {/* Reactions */}
-                  {hasReactions && (
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {Object.entries(
-                        message.reactions.reduce((acc: any, r: any) => {
-                          if (!acc[r.emoji]) acc[r.emoji] = [];
-                          acc[r.emoji].push(r);
-                          return acc;
-                        }, {}),
-                      ).map(([emoji, reactions]: [string, any]) => (
-                        <button
-                          key={emoji}
-                          onClick={() => {
-                            const userReaction = reactions.find(
-                              (r: any) => r.user_id === user?.id,
-                            );
-                            if (userReaction) {
-                              handleRemoveReaction(message.id, emoji);
-                            } else {
-                              handleAddReaction(message.id, emoji);
-                            }
-                          }}
-                          className={`px-2 py-1 rounded-full text-xs border ${
-                            reactions.find((r: any) => r.user_id === user?.id)
-                              ? "bg-indigo-100 border-indigo-300"
-                              : "bg-white border-slate-200"
-                          }`}
-                        >
-                          {emoji} {reactions.length}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                    {/* Forwarded Label */}
+                    {message.forwarded_from_user_name && (
+                      <div className="mb-1 text-xs text-slate-500 flex items-center gap-1">
+                        <Forward size={12} />
+                        Forwarded from {message.forwarded_from_user_name}
+                      </div>
+                    )}
 
-                  {/* Message Actions (on hover) */}
-                  {selectedMessage?.id === message.id && (
+                    {/* Message Content */}
                     <div
-                      className={`mt-1 flex gap-1 ${isOwn ? "flex-row-reverse" : ""}`}
+                      className={`p-3 rounded-2xl shadow-sm ${
+                        isOwn
+                          ? "bg-indigo-600 text-white rounded-tr-none"
+                          : "bg-white text-slate-700 rounded-tl-none"
+                      }`}
                     >
-                      {isOwn && (
-                        <>
-                          <button
-                            onClick={() => {
-                              setEditingMessage(message);
-                              setNewMessage(message.content);
-                            }}
-                            className="p-1 hover:bg-slate-100 rounded text-slate-600"
-                            title="Edit"
-                          >
-                            <Edit2 size={14} />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteMessage(message.id)}
-                            className="p-1 hover:bg-red-100 rounded text-red-600"
-                            title="Delete"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </>
+                      {message.content_type === "markdown" ? (
+                        <div
+                          className={
+                            isOwn
+                              ? "prose prose-invert prose-sm max-w-none"
+                              : "prose prose-sm max-w-none"
+                          }
+                        >
+                          <p className="whitespace-pre-wrap">
+                            {message.content}
+                          </p>
+                        </div>
+                      ) : message.content_type === "image" ||
+                        message.content_type === "file" ? (
+                        <div>
+                          {(() => {
+                            try {
+                              const fileData = JSON.parse(message.content);
+                              return (
+                                <FileAttachment
+                                  path={fileData.path}
+                                  name={fileData.name}
+                                  size={fileData.size}
+                                  type={fileData.type}
+                                  bucket="chat-files"
+                                />
+                              );
+                            } catch (e) {
+                              return <p>{message.content}</p>;
+                            }
+                          })()}
+                        </div>
+                      ) : (
+                        <p className="whitespace-pre-wrap">{message.content}</p>
                       )}
-                      <button
-                        onClick={() => setReplyingTo(message)}
-                        className="p-1 hover:bg-slate-100 rounded text-slate-600"
-                        title="Reply"
-                      >
-                        <Reply size={14} />
-                      </button>
-                      <button
-                        onClick={() => setForwardingMessage(message)}
-                        className="p-1 hover:bg-slate-100 rounded text-slate-600"
-                        title="Forward"
-                      >
-                        <Forward size={14} />
-                      </button>
-                      <button
-                        onClick={() => handlePinMessage(message.id)}
-                        className="p-1 hover:bg-slate-100 rounded text-slate-600"
-                        title="Pin"
-                      >
-                        <Pin size={14} />
-                      </button>
-                      <button
-                        onClick={() => handleAddReaction(message.id, "👍")}
-                        className="p-1 hover:bg-slate-100 rounded text-slate-600"
-                        title="React"
-                      >
-                        <Smile size={14} />
-                      </button>
+
+                      {message.is_edited && (
+                        <span className="text-xs opacity-70 ml-2">
+                          (edited)
+                        </span>
+                      )}
                     </div>
-                  )}
 
-                  <span className="text-xs text-slate-400 mt-1">
-                    {formatTime(message.created_at)}
-                  </span>
+                    {/* Reactions */}
+                    {hasReactions && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {Object.entries(
+                          message.reactions.reduce((acc: any, r: any) => {
+                            if (!acc[r.emoji]) acc[r.emoji] = [];
+                            acc[r.emoji].push(r);
+                            return acc;
+                          }, {})
+                        ).map(([emoji, reactions]: [string, any]) => (
+                          <button
+                            key={emoji}
+                            onClick={() => {
+                              const userReaction = reactions.find(
+                                (r: any) => r.user_id === user?.id
+                              );
+                              if (userReaction) {
+                                handleRemoveReaction(message.id, emoji);
+                              } else {
+                                handleAddReaction(message.id, emoji);
+                              }
+                            }}
+                            className={`px-2 py-1 rounded-full text-xs border ${
+                              reactions.find((r: any) => r.user_id === user?.id)
+                                ? "bg-indigo-100 border-indigo-300"
+                                : "bg-white border-slate-200"
+                            }`}
+                          >
+                            {emoji} {reactions.length}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Message Actions (on hover) */}
+                    {selectedMessage?.id === message.id && (
+                      <div
+                        className={`mt-1 flex gap-1 ${
+                          isOwn ? "flex-row-reverse" : ""
+                        }`}
+                      >
+                        {isOwn && (
+                          <>
+                            <button
+                              onClick={() => {
+                                setEditingMessage(message);
+                                setNewMessage(message.content);
+                              }}
+                              className="p-1 hover:bg-slate-100 rounded text-slate-600"
+                              title="Edit"
+                            >
+                              <Edit2 size={14} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteMessage(message.id)}
+                              className="p-1 hover:bg-red-100 rounded text-red-600"
+                              title="Delete"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </>
+                        )}
+                        <button
+                          onClick={() => setReplyingTo(message)}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-600"
+                          title="Reply"
+                        >
+                          <Reply size={14} />
+                        </button>
+                        <button
+                          onClick={() => setForwardingMessage(message)}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-600"
+                          title="Forward"
+                        >
+                          <Forward size={14} />
+                        </button>
+                        <button
+                          onClick={() => handlePinMessage(message.id)}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-600"
+                          title="Pin"
+                        >
+                          <Pin size={14} />
+                        </button>
+                        <button
+                          onClick={() => handleAddReaction(message.id, "👍")}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-600"
+                          title="React"
+                        >
+                          <Smile size={14} />
+                        </button>
+                      </div>
+                    )}
+
+                    <span className="text-xs text-slate-400 mt-1">
+                      {formatTime(message.created_at)}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            );
-          })
+              );
+            })
+          )}
+          <div ref={messagesEndRef} style={{ height: "1px" }} />
+        </div>
+
+        {/* Reply Preview */}
+        {replyingTo && (
+          <div className="px-4 py-2 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm">
+              <Reply size={16} className="text-indigo-600" />
+              <span className="text-slate-600">
+                Replying to {replyingTo.sender_name}
+              </span>
+              <span className="text-slate-400 truncate max-w-xs">
+                {replyingTo.content}
+              </span>
+            </div>
+            <button
+              onClick={() => setReplyingTo(null)}
+              className="p-1 hover:bg-slate-200 rounded"
+            >
+              <X size={16} />
+            </button>
+          </div>
         )}
-        <div ref={messagesEndRef} style={{ height: "1px" }} />
-      </div>
 
-      {/* Reply Preview */}
-      {replyingTo && (
-        <div className="px-4 py-2 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm">
-            <Reply size={16} className="text-indigo-600" />
-            <span className="text-slate-600">
-              Replying to {replyingTo.sender_name}
-            </span>
-            <span className="text-slate-400 truncate max-w-xs">
-              {replyingTo.content}
-            </span>
+        {/* Forward Preview */}
+        {forwardingMessage && (
+          <div className="px-4 py-2 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm">
+              <Forward size={16} className="text-indigo-600" />
+              <span className="text-slate-600">Forwarding message</span>
+            </div>
+            <button
+              onClick={() => setForwardingMessage(null)}
+              className="p-1 hover:bg-slate-200 rounded"
+            >
+              <X size={16} />
+            </button>
           </div>
-          <button
-            onClick={() => setReplyingTo(null)}
-            className="p-1 hover:bg-slate-200 rounded"
-          >
-            <X size={16} />
-          </button>
-        </div>
-      )}
+        )}
 
-      {/* Forward Preview */}
-      {forwardingMessage && (
-        <div className="px-4 py-2 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm">
-            <Forward size={16} className="text-indigo-600" />
-            <span className="text-slate-600">Forwarding message</span>
+        {/* Edit Preview */}
+        {editingMessage && (
+          <div className="px-4 py-2 bg-indigo-50 border-t border-slate-200 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm">
+              <Edit2 size={16} className="text-indigo-600" />
+              <span className="text-indigo-600">Editing message</span>
+            </div>
+            <button
+              onClick={() => {
+                setEditingMessage(null);
+                setNewMessage("");
+              }}
+              className="p-1 hover:bg-indigo-200 rounded"
+            >
+              <X size={16} />
+            </button>
           </div>
-          <button
-            onClick={() => setForwardingMessage(null)}
-            className="p-1 hover:bg-slate-200 rounded"
-          >
-            <X size={16} />
-          </button>
-        </div>
-      )}
+        )}
 
-      {/* Edit Preview */}
-      {editingMessage && (
-        <div className="px-4 py-2 bg-indigo-50 border-t border-slate-200 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm">
-            <Edit2 size={16} className="text-indigo-600" />
-            <span className="text-indigo-600">Editing message</span>
-          </div>
-          <button
-            onClick={() => {
-              setEditingMessage(null);
-              setNewMessage("");
-            }}
-            className="p-1 hover:bg-indigo-200 rounded"
-          >
-            <X size={16} />
-          </button>
-        </div>
-      )}
-
-      {/* Input Area */}
-      <div className="p-4 bg-white/60 border-t border-slate-200 relative flex-shrink-0">
-        {/* {showEmojiPicker && (
+        {/* Input Area */}
+        <div className="p-4 bg-white/60 border-t border-slate-200 relative flex-shrink-0">
+          {/* {showEmojiPicker && (
           <div className="absolute bottom-full right-4 mb-2 z-50">
             <EmojiPicker onEmojiClick={onEmojiClick} />
           </div>
         )} */}
 
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-            className="p-2.5 hover:bg-slate-100 rounded-xl text-slate-600 transition-colors"
-          >
-            <Smile size={20} />
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+              className="p-2.5 hover:bg-slate-100 rounded-xl text-slate-600 transition-colors"
+            >
+              <Smile size={20} />
+            </button>
 
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileSelect}
-            className="hidden"
-          />
-          <button
-            onClick={handleFileClick}
-            disabled={isUploadingFile}
-            className="p-2.5 hover:bg-slate-100 rounded-xl text-slate-600 transition-colors disabled:opacity-50"
-          >
-            {isUploadingFile ? (
-              <Loader2 size={20} className="animate-spin" />
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileSelect}
+              className="hidden"
+            />
+            <button
+              onClick={handleFileClick}
+              disabled={isUploadingFile}
+              className="p-2.5 hover:bg-slate-100 rounded-xl text-slate-600 transition-colors disabled:opacity-50"
+            >
+              {isUploadingFile ? (
+                <Loader2 size={20} className="animate-spin" />
+              ) : (
+                <Paperclip size={20} />
+              )}
+            </button>
+
+            <div className="flex-1 relative">
+              <textarea
+                ref={inputRef}
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (editingMessage) {
+                      handleEditMessage();
+                    } else {
+                      handleSendMessage();
+                    }
+                  }
+                }}
+                placeholder={
+                  editingMessage ? "Edit your message..." : "Type a message..."
+                }
+                className="w-full px-4 py-2.5 rounded-xl bg-white border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none"
+                rows={1}
+                style={{ minHeight: "44px", maxHeight: "120px" }}
+              />
+            </div>
+
+            {editingMessage ? (
+              <>
+                <button
+                  onClick={() => {
+                    setEditingMessage(null);
+                    setNewMessage("");
+                  }}
+                  className="p-2.5 hover:bg-slate-100 rounded-xl text-slate-600 transition-colors"
+                >
+                  <X size={20} />
+                </button>
+                <button
+                  onClick={handleEditMessage}
+                  className="p-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
+                >
+                  <Check size={20} />
+                </button>
+              </>
             ) : (
-              <Paperclip size={20} />
-            )}
-          </button>
-
-          <div className="flex-1 relative">
-            <textarea
-              ref={inputRef}
-              value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
+              <button
+                type="button"
+                onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  if (editingMessage) {
-                    handleEditMessage();
-                  } else {
-                    handleSendMessage();
-                  }
-                }
-              }}
-              placeholder={
-                editingMessage ? "Edit your message..." : "Type a message..."
-              }
-              className="w-full px-4 py-2.5 rounded-xl bg-white border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none"
-              rows={1}
-              style={{ minHeight: "44px", maxHeight: "120px" }}
-            />
-          </div>
-
-          {editingMessage ? (
-            <>
-              <button
-                onClick={() => {
-                  setEditingMessage(null);
-                  setNewMessage("");
+                  handleSendMessage();
                 }}
-                className="p-2.5 hover:bg-slate-100 rounded-xl text-slate-600 transition-colors"
+                disabled={!newMessage.trim()}
+                className="p-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                <X size={20} />
+                <Send size={20} />
               </button>
-              <button
-                onClick={handleEditMessage}
-                className="p-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
-              >
-                <Check size={20} />
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                handleSendMessage();
-              }}
-              disabled={!newMessage.trim()}
-              className="p-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              <Send size={20} />
-            </button>
-          )}
+            )}
+          </div>
         </div>
       </div>
-    </div>
     </>
   );
 };
