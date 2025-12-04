@@ -73,7 +73,7 @@ scripts/super_admin_config.json
 
 # UV
 .uv/
-uv.lock
+# uv.lock
 
 # Jupyter
 .ipynb_checkpoints/
