@@ -1,12 +1,12 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Phone, PhoneOff, Video, X } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
-import { useMeeting } from '../contexts/MeetingContext';
-import { supabase } from '../utils/supabase';
-import { api } from '../utils/api';
-import { API_ENDPOINTS } from '../config';
-import Avatar from './Avatar';
+import React, { useEffect, useState, useRef, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
+import { Phone, PhoneOff, Video, X } from "lucide-react";
+import { useAuth } from "../contexts/AuthContext";
+import { useMeeting } from "../contexts/MeetingContext";
+import { supabase } from "../utils/supabase";
+import { api } from "../utils/api";
+import { API_ENDPOINTS } from "../config";
+import Avatar from "./Avatar";
 
 interface IncomingCallProps {
   // No props needed, it manages its own state via Supabase subscription
@@ -25,7 +25,9 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
   const { user } = useAuth();
   const { isInMeeting, currentMeetingId } = useMeeting();
   const navigate = useNavigate();
-  const [incomingCall, setIncomingCall] = useState<IncomingCallData | null>(null);
+  const [incomingCall, setIncomingCall] = useState<IncomingCallData | null>(
+    null
+  );
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -36,11 +38,11 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
     const checkExistingInvites = async () => {
       try {
         const { data: participants, error } = await supabase
-          .from('meeting_participants')
-          .select('*')
-          .eq('user_id', user.id)
-          .eq('status', 'invited')
-          .order('created_at', { ascending: false })
+          .from("meeting_participants")
+          .select("*")
+          .eq("user_id", user.id)
+          .eq("status", "invited")
+          .order("created_at", { ascending: false })
           .limit(1);
 
         if (error) {
@@ -60,29 +62,33 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
     // Helper function to handle incoming call
     const handleIncomingCall = async (participant: any) => {
       try {
-        const meetingRes = await api.get(API_ENDPOINTS.MEETINGS.DETAIL(participant.meeting_id));
+        const meetingRes = await api.get(
+          API_ENDPOINTS.MEETINGS.DETAIL(participant.meeting_id)
+        );
         const meeting = meetingRes.data;
-        
+
         console.log("Incoming call meeting details:", meeting);
-        
+
         // Fetch caller (host) information
-        let callerName = 'Unknown';
+        let callerName = "Unknown";
         let callerAvatar: string | undefined;
-        
+
         try {
           // Get organization members to find caller info
           const membersRes = await api.get(API_ENDPOINTS.MESSAGING.MEMBERS);
-          const caller = membersRes.data.find((m: any) => m.id === meeting.host_id);
+          const caller = membersRes.data.find(
+            (m: any) => m.id === meeting.host_id
+          );
           if (caller) {
-            callerName = caller.user_name || caller.email || 'Unknown';
+            callerName = caller.user_name || caller.email || "Unknown";
             callerAvatar = caller.avatar_url;
           }
         } catch (err) {
           console.error("Failed to fetch caller info:", err);
           // Fallback: use meeting title or host ID
-          callerName = meeting.title?.replace('Call with ', '') || 'Unknown';
+          callerName = meeting.title?.replace("Call with ", "") || "Unknown";
         }
-        
+
         setIncomingCall({
           participantId: participant.id,
           meetingId: participant.meeting_id,
@@ -101,19 +107,19 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
 
     // Subscribe to meeting_participants table for new invites
     const channel = supabase
-      .channel('incoming_calls')
+      .channel("incoming_calls")
       .on(
-        'postgres_changes',
+        "postgres_changes",
         {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'meeting_participants',
+          event: "INSERT",
+          schema: "public",
+          table: "meeting_participants",
           filter: `user_id=eq.${user.id}`,
         },
         async (payload) => {
           console.log("Incoming call payload:", payload);
           const newParticipant = payload.new;
-          if (newParticipant.status === 'invited') {
+          if (newParticipant.status === "invited") {
             await handleIncomingCall(newParticipant);
           }
         }
@@ -127,18 +133,42 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
     };
   }, [user]);
 
+  const handleReject = useCallback(async () => {
+    if (!incomingCall || !user) return;
+
+    // Stop ringtone
+    if (audioRef.current) {
+      audioRef.current.pause();
+    }
+
+    // Update participant status to declined
+    try {
+      await api.patch(
+        API_ENDPOINTS.MEETINGS.UPDATE_PARTICIPANT_STATUS(
+          incomingCall.meetingId,
+          incomingCall.participantId
+        ),
+        { status: "declined" }
+      );
+    } catch (error) {
+      console.error("Failed to decline call:", error);
+    }
+
+    setIncomingCall(null);
+  }, [incomingCall, user]);
+
   useEffect(() => {
     if (incomingCall) {
       // Play ringtone
-      audioRef.current = new Audio('/ringtone.wav');
+      audioRef.current = new Audio("/ringtone.wav");
       audioRef.current.loop = true;
-      audioRef.current.play().catch(e => console.error("Audio play failed", e));
+      audioRef.current
+        .play()
+        .catch((e) => console.error("Audio play failed", e));
 
       // Auto reject after 1 minute
       timeoutRef.current = setTimeout(() => {
-        if (incomingCall) {
-          handleReject();
-        }
+        handleReject();
       }, 60000);
 
       return () => {
@@ -151,23 +181,26 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
         }
       };
     }
-  }, [incomingCall]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [incomingCall, handleReject]);
 
   const handleAccept = async () => {
     if (!incomingCall || !user) return;
-    
+
     // Stop ringtone
     if (audioRef.current) {
       audioRef.current.pause();
     }
-    
+
     // Update participant status to accepted
     try {
       await api.patch(
-        API_ENDPOINTS.MEETINGS.UPDATE_PARTICIPANT_STATUS(incomingCall.meetingId, incomingCall.participantId),
-        { status: 'accepted' }
+        API_ENDPOINTS.MEETINGS.UPDATE_PARTICIPANT_STATUS(
+          incomingCall.meetingId,
+          incomingCall.participantId
+        ),
+        { status: "accepted" }
       );
-      
+
       // If in another meeting, navigate will trigger leave
       // Navigate to new meeting
       navigate(`/meeting/${incomingCall.meetingId}`);
@@ -182,19 +215,22 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
 
   const handleLeaveAndJoin = async () => {
     if (!incomingCall || !user) return;
-    
+
     // Stop ringtone
     if (audioRef.current) {
       audioRef.current.pause();
     }
-    
+
     // Update participant status to accepted
     try {
       await api.patch(
-        API_ENDPOINTS.MEETINGS.UPDATE_PARTICIPANT_STATUS(incomingCall.meetingId, incomingCall.participantId),
-        { status: 'accepted' }
+        API_ENDPOINTS.MEETINGS.UPDATE_PARTICIPANT_STATUS(
+          incomingCall.meetingId,
+          incomingCall.participantId
+        ),
+        { status: "accepted" }
       );
-      
+
       // Navigate to new meeting (this will automatically leave the current one)
       navigate(`/meeting/${incomingCall.meetingId}`);
       setIncomingCall(null);
@@ -203,27 +239,6 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
       navigate(`/meeting/${incomingCall.meetingId}`);
       setIncomingCall(null);
     }
-  };
-
-  const handleReject = async () => {
-    if (!incomingCall || !user) return;
-
-    // Stop ringtone
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
-
-    // Update participant status to declined
-    try {
-      await api.patch(
-        API_ENDPOINTS.MEETINGS.UPDATE_PARTICIPANT_STATUS(incomingCall.meetingId, incomingCall.participantId),
-        { status: 'declined' }
-      );
-    } catch (error) {
-      console.error("Failed to decline call:", error);
-    }
-
-    setIncomingCall(null);
   };
 
   if (!incomingCall) return null;
@@ -245,11 +260,13 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
                 <Video size={10} className="text-white" />
               </div>
             </div>
-            
+
             <div className="flex-1 min-w-0">
               <div className="flex items-start justify-between gap-2 mb-2">
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-white truncate">{incomingCall.callerName}</p>
+                  <p className="text-sm font-semibold text-white truncate">
+                    {incomingCall.callerName}
+                  </p>
                   <p className="text-xs text-slate-400">Incoming call</p>
                 </div>
                 <button
@@ -260,7 +277,7 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
                   <X size={16} className="text-slate-400" />
                 </button>
               </div>
-              
+
               <div className="flex items-center gap-2 mt-3">
                 <button
                   onClick={handleReject}
@@ -299,7 +316,7 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
             <Video size={16} className="text-white" />
           </div>
         </div>
-        
+
         <div className="text-center space-y-2">
           <h3 className="text-2xl font-bold text-white">Incoming Call...</h3>
           <p className="text-slate-400 text-lg">{incomingCall.callerName}</p>
@@ -311,9 +328,14 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
             className="flex flex-col items-center gap-2 group"
           >
             <div className="w-16 h-16 rounded-full bg-red-500/20 group-hover:bg-red-500 flex items-center justify-center transition-all border-2 border-red-500">
-              <PhoneOff size={28} className="text-red-500 group-hover:text-white" />
+              <PhoneOff
+                size={28}
+                className="text-red-500 group-hover:text-white"
+              />
             </div>
-            <span className="text-sm text-slate-400 group-hover:text-white">Decline</span>
+            <span className="text-sm text-slate-400 group-hover:text-white">
+              Decline
+            </span>
           </button>
 
           <button
@@ -321,9 +343,14 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
             className="flex flex-col items-center gap-2 group"
           >
             <div className="w-16 h-16 rounded-full bg-green-500/20 group-hover:bg-green-500 flex items-center justify-center transition-all border-2 border-green-500 animate-bounce">
-              <Phone size={28} className="text-green-500 group-hover:text-white" />
+              <Phone
+                size={28}
+                className="text-green-500 group-hover:text-white"
+              />
             </div>
-            <span className="text-sm text-slate-400 group-hover:text-white">Accept</span>
+            <span className="text-sm text-slate-400 group-hover:text-white">
+              Accept
+            </span>
           </button>
         </div>
       </div>

@@ -33,17 +33,29 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   }
 
   // Redirect pending users without organization to setup page
-  if (user?.status === "pending" && !user?.organization_id && window.location.pathname !== "/complete-organization-setup") {
+  if (
+    user?.status === "pending" &&
+    !user?.organization_id &&
+    window.location.pathname !== "/complete-organization-setup"
+  ) {
     return <Navigate to="/complete-organization-setup" replace />;
   }
 
   // Redirect pending users with organization to pending approval page
-  if (user?.status === "pending" && user?.organization_id && window.location.pathname !== "/pending-approval") {
+  if (
+    user?.status === "pending" &&
+    user?.organization_id &&
+    window.location.pathname !== "/pending-approval"
+  ) {
     return <Navigate to="/pending-approval" replace />;
   }
 
   // Redirect active users away from pending/setup pages
-  if (user?.status === "active" && (window.location.pathname === "/pending-approval" || window.location.pathname === "/complete-organization-setup")) {
+  if (
+    user?.status === "active" &&
+    (window.location.pathname === "/pending-approval" ||
+      window.location.pathname === "/complete-organization-setup")
+  ) {
     return <Navigate to="/dashboard" replace />;
   }
 
@@ -58,43 +70,46 @@ function App() {
           <MeetingProvider>
             <IncomingCallOverlay />
             <Routes>
-            {/* Public Routes */}
-            <Route path="/" element={<LandingPage />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/signup" element={<Signup />} />
-            <Route path="/organization-setup" element={<OrganizationSetup />} />
-            <Route
-              path="/complete-organization-setup"
-              element={<CompleteOrganizationSetup />}
-            />
+              {/* Public Routes */}
+              <Route path="/" element={<LandingPage />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/signup" element={<Signup />} />
+              <Route
+                path="/organization-setup"
+                element={<OrganizationSetup />}
+              />
+              <Route
+                path="/complete-organization-setup"
+                element={<CompleteOrganizationSetup />}
+              />
 
-            {/* Protected Routes */}
-            <Route
-              path="/pending-approval"
-              element={
-                <ProtectedRoute>
-                  <PendingApproval />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/dashboard"
-              element={
-                <ProtectedRoute>
-                  <Dashboard />
-                </ProtectedRoute>
-              }
-            />
+              {/* Protected Routes */}
+              <Route
+                path="/pending-approval"
+                element={
+                  <ProtectedRoute>
+                    <PendingApproval />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/dashboard"
+                element={
+                  <ProtectedRoute>
+                    <Dashboard />
+                  </ProtectedRoute>
+                }
+              />
 
-            {/* Standalone Protected Route */}
-            <Route
-              path="/meeting/:id"
-              element={
-                <ProtectedRoute>
-                  <MeetingRoom />
-                </ProtectedRoute>
-              }
-            />
+              {/* Standalone Protected Route */}
+              <Route
+                path="/meeting/:id"
+                element={
+                  <ProtectedRoute>
+                    <MeetingRoom />
+                  </ProtectedRoute>
+                }
+              />
             </Routes>
           </MeetingProvider>
         </AuthProvider>
