@@ -90,9 +90,17 @@ const OutgoingCallOverlay: React.FC<OutgoingCallOverlayProps> = ({
         }
       });
 
-    // Auto timeout after 1 minute
-    timeoutRef.current = setTimeout(() => {
+    // Auto timeout after 1 minute - mark as missed
+    timeoutRef.current = setTimeout(async () => {
       setCallStatus('timeout');
+      // Mark the call as missed when it times out
+      try {
+        await api.post(
+          API_ENDPOINTS.MEETINGS.MARK_MISSED(meetingId, participantId)
+        );
+      } catch (error) {
+        console.error('Failed to mark call as missed on timeout:', error);
+      }
       setTimeout(() => {
         onCancel();
       }, 2000);

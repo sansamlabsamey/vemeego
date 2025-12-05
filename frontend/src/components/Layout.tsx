@@ -84,7 +84,7 @@ const Layout = ({ children, activeTab, onTabChange }: LayoutProps) => {
       <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] rounded-full bg-blue-200/30 blur-[120px] pointer-events-none" />
 
       {/* Mobile Header */}
-      <div className="md:hidden absolute top-0 left-0 right-0 h-16 bg-white/80 backdrop-blur-md border-b border-white/50 flex items-center justify-between px-4 z-30">
+      <div className="md:hidden absolute top-0 left-0 right-0 h-16 bg-white/80 backdrop-blur-md border-b border-white/50 flex items-center justify-between px-4 z-20">
         <div className="flex items-center gap-2">
           <img src="/logo.png" alt="Logo" className="w-8 h-8" />
         </div>
@@ -215,7 +215,7 @@ const Layout = ({ children, activeTab, onTabChange }: LayoutProps) => {
       {/* Overlay for mobile menu */}
       {isMobileMenuOpen && (
         <div
-          className="fixed inset-0 bg-black/20 backdrop-blur-sm z-30 md:hidden"
+          className="fixed inset-0 bg-black/20 backdrop-blur-sm z-20 md:hidden"
           onClick={closeMobileMenu}
         />
       )}

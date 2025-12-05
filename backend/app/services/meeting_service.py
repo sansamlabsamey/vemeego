@@ -255,19 +255,21 @@ class MeetingService:
     async def get_user_meetings(self, user_id: UUID) -> List[Dict[str, Any]]:
         """
         Get all meetings for a user (hosted or invited).
+        Includes participant status for filtering missed calls.
         """
         # This is complex to query directly with Supabase client in one go if we want OR condition across tables.
         # Simplest is to query meetings where host_id = user_id OR id IN (select meeting_id from participants where user_id = user_id)
         
-        # Get meetings where user is participant
+        # Get meetings where user is participant (with status)
         participating_response = (
             self.admin_client.table("meeting_participants")
-            .select("meeting_id")
+            .select("meeting_id, status")
             .eq("user_id", str(user_id))
             .execute()
         )
         
         meeting_ids = [p["meeting_id"] for p in participating_response.data or []]
+        participant_status_map = {p["meeting_id"]: p["status"] for p in participating_response.data or []}
         
         # Get meetings hosted by user or in meeting_ids
         meetings_response = (
@@ -278,7 +280,17 @@ class MeetingService:
             .execute()
         )
         
-        return meetings_response.data or []
+        meetings = meetings_response.data or []
+        
+        # Add participant status to each meeting for filtering
+        for meeting in meetings:
+            meeting_id = meeting["id"]
+            if meeting_id in participant_status_map:
+                meeting["user_participant_status"] = participant_status_map[meeting_id]
+            elif str(meeting["host_id"]) == str(user_id):
+                meeting["user_participant_status"] = "host"
+        
+        return meetings
 
     async def invite_participant(
         self,
@@ -544,3 +556,293 @@ class MeetingService:
             return response.data[0] if response.data and len(response.data) > 0 else None
         except Exception:
             return None
+
+    async def leave_meeting(
+        self,
+        meeting_id: UUID,
+        user_id: UUID,
+    ) -> Dict[str, Any]:
+        """
+        Mark participant as having left the meeting.
+        This triggers auto-end logic if needed.
+        """
+        # Get participant record
+        participant = await self.get_participant_by_user(meeting_id, user_id)
+        if not participant:
+            raise NotFoundError("Participant not found")
+        
+        # Update participant to mark as left
+        update_data = {
+            "left_at": datetime.utcnow().isoformat(),
+            "status": "declined"  # Mark as declined since they left
+        }
+        
+        response = (
+            self.admin_client.table("meeting_participants")
+            .update(update_data)
+            .eq("id", str(participant["id"]))
+            .execute()
+        )
+        
+        if not response.data:
+            raise BadRequestError("Failed to update participant leave status")
+        
+        # Check if meeting should auto-end
+        await self._check_and_end_meeting_if_needed(meeting_id)
+        
+        return response.data[0]
+
+    async def _check_and_end_meeting_if_needed(self, meeting_id: UUID) -> None:
+        """
+        Check if meeting should auto-end based on participant count and meeting type.
+        - 1-1 calls (instant type with 2 participants): end when only 1 participant remains
+        - Scheduled/webinars: end when all participants leave
+        """
+        # Get meeting details
+        meeting_response = (
+            self.admin_client.table("meetings")
+            .select("*")
+            .eq("id", str(meeting_id))
+            .execute()
+        )
+        
+        if not meeting_response.data:
+            return
+        
+        meeting = meeting_response.data[0]
+        
+        # Don't end if already completed or cancelled
+        if meeting["status"] in ["completed", "cancelled"]:
+            return
+        
+        # Get all participants
+        participants_response = (
+            self.admin_client.table("meeting_participants")
+            .select("*")
+            .eq("meeting_id", str(meeting_id))
+            .execute()
+        )
+        
+        participants = participants_response.data or []
+        
+        # Count active participants (not declined, not missed, not left)
+        active_participants = [
+            p for p in participants
+            if p.get("status") not in ["declined", "missed"]
+            and p.get("left_at") is None
+        ]
+        
+        should_end = False
+        
+        # Check auto-end conditions
+        if meeting["type"] == "instant":
+            # 1-1 call: end when only 1 participant remains (or less)
+            # Check total participants to determine if it's a 1-1 call
+            total_participants = len([p for p in participants if p.get("user_id")])  # Only count users, not external
+            if total_participants == 2 and len(active_participants) <= 1:
+                should_end = True
+            elif len(active_participants) == 0:
+                # All participants left
+                should_end = True
+        else:
+            # Scheduled meeting or webinar: end when all participants leave
+            if len(active_participants) == 0:
+                should_end = True
+        
+        if should_end:
+            host_id = UUID(meeting.get("host_id")) if meeting.get("host_id") else None
+            await self.end_meeting(meeting_id, host_id)
+
+    async def end_meeting(
+        self,
+        meeting_id: UUID,
+        host_id: Optional[UUID] = None,
+    ) -> Dict[str, Any]:
+        """
+        End a meeting: close room, clear chats, mark as completed.
+        """
+        # Get meeting
+        meeting_response = (
+            self.admin_client.table("meetings")
+            .select("*")
+            .eq("id", str(meeting_id))
+            .execute()
+        )
+        
+        if not meeting_response.data:
+            raise NotFoundError("Meeting not found")
+        
+        meeting = meeting_response.data[0]
+        
+        # Don't end if already completed or cancelled
+        if meeting["status"] in ["completed", "cancelled"]:
+            return meeting
+        
+        # Close LiveKit room if room_name exists
+        if meeting.get("room_name"):
+            try:
+                # Use LiveKit API to delete/close the room
+                livekit_api = api.LiveKitAPI(
+                    self.livekit_url,
+                    self.livekit_api_key,
+                    self.livekit_api_secret
+                )
+                # Delete room to close it
+                livekit_api.delete_room(api.DeleteRoomRequest(room=meeting["room_name"]))
+            except Exception as e:
+                # Log but don't fail if room deletion fails
+                # Room will be cleaned up automatically by LiveKit after inactivity
+                print(f"WARNING: Failed to close LiveKit room: {str(e)}")
+        
+        # Clear meeting chat messages
+        try:
+            self.admin_client.table("meeting_chat_messages") \
+                .delete() \
+                .eq("meeting_id", str(meeting_id)) \
+                .execute()
+        except Exception as e:
+            print(f"WARNING: Failed to clear chat messages: {str(e)}")
+        
+        # Update meeting status to completed
+        update_data = {
+            "status": "completed",
+            "end_time": datetime.utcnow().isoformat(),
+        }
+        
+        response = (
+            self.admin_client.table("meetings")
+            .update(update_data)
+            .eq("id", str(meeting_id))
+            .execute()
+        )
+        
+        if not response.data:
+            raise BadRequestError("Failed to end meeting")
+        
+        return response.data[0]
+
+    async def mark_call_as_missed(
+        self,
+        meeting_id: UUID,
+        participant_id: UUID,
+    ) -> Dict[str, Any]:
+        """
+        Mark a call as missed when participant doesn't answer.
+        For instant calls, this will also mark the meeting as "not_answered" and close the room.
+        """
+        # Get meeting first to check if it's an instant call
+        meeting_response = (
+            self.admin_client.table("meetings")
+            .select("*")
+            .eq("id", str(meeting_id))
+            .execute()
+        )
+        
+        if not meeting_response.data:
+            raise NotFoundError("Meeting not found")
+        
+        meeting = meeting_response.data[0]
+        
+        # Get participant
+        participant_response = (
+            self.admin_client.table("meeting_participants")
+            .select("*")
+            .eq("id", str(participant_id))
+            .eq("meeting_id", str(meeting_id))
+            .execute()
+        )
+        
+        if not participant_response.data:
+            raise NotFoundError("Participant not found")
+        
+        participant = participant_response.data[0]
+        
+        # Only mark as missed if still in "invited" status
+        if participant.get("status") != "invited":
+            return participant
+        
+        # Update participant to missed
+        update_data = {"status": "missed"}
+        
+        response = (
+            self.admin_client.table("meeting_participants")
+            .update(update_data)
+            .eq("id", str(participant_id))
+            .execute()
+        )
+        
+        if not response.data:
+            raise BadRequestError("Failed to mark call as missed")
+        
+        # If this is an instant call (1-1 call) and the participant is marked as missed,
+        # mark the meeting as "not_answered" and close the room
+        if meeting.get("type") == "instant" and meeting.get("status") not in ["completed", "cancelled", "not_answered"]:
+            # Check if this is a 1-1 call (only 2 participants total)
+            all_participants_response = (
+                self.admin_client.table("meeting_participants")
+                .select("*")
+                .eq("meeting_id", str(meeting_id))
+                .execute()
+            )
+            
+            all_participants = all_participants_response.data or []
+            user_participants = [p for p in all_participants if p.get("user_id")]
+            
+            # If it's a 1-1 call (2 participants) and one is marked as missed, mark meeting as not_answered
+            if len(user_participants) == 2:
+                # Check if any participant is missed
+                has_missed = any(p.get("status") == "missed" for p in all_participants)
+                
+                if has_missed:
+                    # Mark meeting as not_answered and close it
+                    await self._mark_meeting_as_not_answered(meeting_id, meeting)
+        
+        return response.data[0]
+
+    async def _mark_meeting_as_not_answered(
+        self,
+        meeting_id: UUID,
+        meeting: Dict[str, Any],
+    ) -> None:
+        """
+        Mark a meeting as not_answered and close the room.
+        This is called when an instant call is not answered.
+        """
+        # Close LiveKit room if room_name exists
+        if meeting.get("room_name"):
+            try:
+                # Use LiveKit API to delete/close the room
+                livekit_api = api.LiveKitAPI(
+                    self.livekit_url,
+                    self.livekit_api_key,
+                    self.livekit_api_secret
+                )
+                # Delete room to close it
+                livekit_api.delete_room(api.DeleteRoomRequest(room=meeting["room_name"]))
+            except Exception as e:
+                # Log but don't fail if room deletion fails
+                # Room will be cleaned up automatically by LiveKit after inactivity
+                print(f"WARNING: Failed to close LiveKit room: {str(e)}")
+        
+        # Clear meeting chat messages (if any)
+        try:
+            self.admin_client.table("meeting_chat_messages") \
+                .delete() \
+                .eq("meeting_id", str(meeting_id)) \
+                .execute()
+        except Exception as e:
+            print(f"WARNING: Failed to clear chat messages: {str(e)}")
+        
+        # Update meeting status to not_answered
+        update_data = {
+            "status": "not_answered",
+            "end_time": datetime.utcnow().isoformat(),
+        }
+        
+        try:
+            self.admin_client.table("meetings") \
+                .update(update_data) \
+                .eq("id", str(meeting_id)) \
+                .execute()
+        except Exception as e:
+            print(f"WARNING: Failed to mark meeting as not_answered: {str(e)}")

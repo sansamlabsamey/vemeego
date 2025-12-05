@@ -272,17 +272,28 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
       audioRef.current.pause();
     }
 
-    // Update participant status to declined
+    // Mark call as missed (not answered)
     try {
-      await api.patch(
-        API_ENDPOINTS.MEETINGS.UPDATE_PARTICIPANT_STATUS(
+      await api.post(
+        API_ENDPOINTS.MEETINGS.MARK_MISSED(
           incomingCall.meetingId,
           incomingCall.participantId
-        ),
-        { status: "declined" }
+        )
       );
     } catch (error) {
-      console.error("Failed to decline call:", error);
+      console.error("Failed to mark call as missed:", error);
+      // Fallback to declined if missed endpoint fails
+      try {
+        await api.patch(
+          API_ENDPOINTS.MEETINGS.UPDATE_PARTICIPANT_STATUS(
+            incomingCall.meetingId,
+            incomingCall.participantId
+          ),
+          { status: "declined" }
+        );
+      } catch (err) {
+        console.error("Failed to decline call:", err);
+      }
     }
 
     setIncomingCall(null);
@@ -306,7 +317,7 @@ const IncomingCallOverlay: React.FC<IncomingCallProps> = () => {
         .play()
         .catch((e) => console.error("Audio play failed", e));
 
-      // Auto reject after 1 minute
+      // Auto reject after 1 minute (marks as missed)
       timeoutRef.current = setTimeout(() => {
         handleReject();
       }, 60000);

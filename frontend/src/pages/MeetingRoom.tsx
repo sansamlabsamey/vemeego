@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   LiveKitRoom,
   VideoConference,
@@ -19,7 +19,7 @@ import { Loader2, MessageSquare, PhoneOff } from 'lucide-react';
 import MeetingChat from '../components/MeetingChat';
 
 // Custom disconnect button that properly cleans up tracks
-const CustomDisconnectButton = ({ onDisconnect }: { onDisconnect: () => void }) => {
+const CustomDisconnectButton = ({ meetingId, onDisconnect }: { meetingId: string; onDisconnect: () => void }) => {
   const room = useRoomContext();
 
   const handleDisconnect = async () => {
@@ -44,10 +44,24 @@ const CustomDisconnectButton = ({ onDisconnect }: { onDisconnect: () => void }) 
       // Disconnect from room
       await room.disconnect();
       
+      // Notify backend that participant left (triggers auto-end logic)
+      try {
+        await api.post(API_ENDPOINTS.MEETINGS.LEAVE(meetingId));
+      } catch (error) {
+        console.error('Failed to notify backend of leave:', error);
+        // Continue anyway
+      }
+      
       // Navigate after disconnect
       onDisconnect();
     } catch (error) {
       console.error('Error during disconnect:', error);
+      // Try to notify backend anyway
+      try {
+        await api.post(API_ENDPOINTS.MEETINGS.LEAVE(meetingId));
+      } catch (err) {
+        // Ignore
+      }
       // Navigate anyway
       onDisconnect();
     }
@@ -67,10 +81,28 @@ const CustomDisconnectButton = ({ onDisconnect }: { onDisconnect: () => void }) 
 const MeetingRoom = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [token, setToken] = useState<string>("");
   const [meeting, setMeeting] = useState<any>(null);
   const [error, setError] = useState<string>("");
   const [isChatOpen, setIsChatOpen] = useState(false);
+  
+  // Get previous path from location state or use browser history
+  const previousPath = (location.state as any)?.from || null;
+  
+  // Function to navigate back to previous page
+  const navigateBack = () => {
+    if (previousPath) {
+      navigate(previousPath);
+    } else {
+      // Try to go back in browser history, fallback to dashboard if no history
+      if (window.history.length > 1) {
+        navigate(-1);
+      } else {
+        navigate('/dashboard?tab=meetings');
+      }
+    }
+  };
 
   useEffect(() => {
     const fetchMeetingAndToken = async () => {
@@ -79,7 +111,14 @@ const MeetingRoom = () => {
       try {
         // Fetch meeting details
         const meetingRes = await api.get(API_ENDPOINTS.MEETINGS.DETAIL(id));
-        setMeeting(meetingRes.data);
+        const meetingData = meetingRes.data;
+        setMeeting(meetingData);
+
+        // Check if meeting is completed or not answered
+        if (meetingData.status === "completed" || meetingData.status === "not_answered") {
+          setError("This meeting has ended and cannot be rejoined.");
+          return;
+        }
 
         // Fetch token
         const tokenRes = await api.post(API_ENDPOINTS.MEETINGS.TOKEN(id));
@@ -101,10 +140,10 @@ const MeetingRoom = () => {
           <h2 className="text-2xl font-bold mb-2">Error</h2>
           <p className="text-slate-400 mb-4">{error}</p>
           <button
-            onClick={() => navigate('/dashboard?tab=meetings')}
+            onClick={navigateBack}
             className="px-4 py-2 bg-indigo-600 rounded-lg hover:bg-indigo-700"
           >
-            Back to Meetings
+            Go Back
           </button>
         </div>
       </div>
@@ -130,11 +169,19 @@ const MeetingRoom = () => {
       serverUrl={process.env.REACT_APP_LIVEKIT_URL}
       data-lk-theme="default"
       style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}
-      onDisconnected={(reason) => {
+      onDisconnected={async (reason) => {
         console.log('Disconnected from room:', reason);
+        // Notify backend that participant left
+        if (id) {
+          try {
+            await api.post(API_ENDPOINTS.MEETINGS.LEAVE(id));
+          } catch (error) {
+            console.error('Failed to notify backend of disconnect:', error);
+          }
+        }
         // Small delay to ensure cleanup completes
         setTimeout(() => {
-          navigate('/dashboard?tab=meetings');
+          navigateBack();
         }, 100);
       }}
     >
@@ -171,9 +218,10 @@ const MeetingRoom = () => {
           <div className="w-px h-8 bg-slate-700 mx-2" />
           
           <CustomDisconnectButton 
+            meetingId={id!}
             onDisconnect={() => {
               setTimeout(() => {
-                navigate('/dashboard?tab=meetings');
+                navigateBack();
               }, 100);
             }}
           />

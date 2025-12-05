@@ -45,6 +45,10 @@ export const API_ENDPOINTS = {
     INVITED_PARTICIPANTS: `${API_BASE_URL}/meetings/participants/invited`,
     GET_PARTICIPANT_BY_USER: (meetingId: string, userId: string) =>
       `${API_BASE_URL}/meetings/${meetingId}/participants/by-user/${userId}`,
+    LEAVE: (id: string) => `${API_BASE_URL}/meetings/${id}/leave`,
+    END: (id: string) => `${API_BASE_URL}/meetings/${id}/end`,
+    MARK_MISSED: (meetingId: string, participantId: string) =>
+      `${API_BASE_URL}/meetings/${meetingId}/participants/${participantId}/missed`,
   },
 };
 

@@ -29,6 +29,7 @@ class MeetingStatus:
     ACTIVE = "active"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
+    NOT_ANSWERED = "not_answered"
 
 
 class ParticipantRole:
@@ -46,6 +47,7 @@ class ParticipantStatus:
     ACCEPTED = "accepted"
     DECLINED = "declined"
     JOINED = "joined"
+    MISSED = "missed"
 
 
 # ============================================================================
@@ -138,6 +140,7 @@ class MeetingUpdate(BaseModel):
             MeetingStatus.ACTIVE,
             MeetingStatus.COMPLETED,
             MeetingStatus.CANCELLED,
+            MeetingStatus.NOT_ANSWERED,
         ]
         if v not in valid_statuses:
             raise ValueError(f"Status must be one of: {', '.join(valid_statuses)}")

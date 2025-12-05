@@ -272,3 +272,108 @@ async def update_participant_status(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update participant status: {str(e)}",
         )
+
+@router.post("/{meeting_id}/leave", status_code=status.HTTP_200_OK)
+async def leave_meeting(
+    meeting_id: UUID,
+    current_user: dict = Depends(get_current_active_user),
+):
+    """
+    Leave a meeting. This will trigger auto-end logic if needed.
+    """
+    try:
+        result = await meeting_service.leave_meeting(
+            meeting_id,
+            UUID(current_user["id"])
+        )
+        return result
+    except AppException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to leave meeting: {str(e)}",
+        )
+
+@router.post("/{meeting_id}/end", status_code=status.HTTP_200_OK)
+async def end_meeting(
+    meeting_id: UUID,
+    current_user: dict = Depends(get_current_active_user),
+):
+    """
+    Manually end a meeting (host only). Closes room, clears chats, marks as completed.
+    """
+    try:
+        # Verify user is host
+        meeting = await meeting_service.get_meeting(meeting_id, UUID(current_user["id"]))
+        if str(meeting["host_id"]) != str(current_user["id"]):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the meeting host can end the meeting"
+            )
+        
+        result = await meeting_service.end_meeting(meeting_id)
+        return result
+    except HTTPException:
+        raise
+    except AppException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to end meeting: {str(e)}",
+        )
+
+@router.post("/{meeting_id}/participants/{participant_id}/missed", status_code=status.HTTP_200_OK)
+async def mark_call_as_missed(
+    meeting_id: UUID,
+    participant_id: UUID,
+    current_user: dict = Depends(get_current_active_user),
+):
+    """
+    Mark a call as missed. Can be called by the participant or host.
+    """
+    try:
+        # Verify access - get meeting first
+        meeting = await meeting_service.get_meeting(meeting_id, UUID(current_user["id"]))
+        
+        # Get participant by ID (not by user_id)
+        from app.core.supabase_client import get_admin_client
+        admin_client = get_admin_client()
+        participant_response = (
+            admin_client.table("meeting_participants")
+            .select("*")
+            .eq("id", str(participant_id))
+            .eq("meeting_id", str(meeting_id))
+            .execute()
+        )
+        
+        if not participant_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Participant not found"
+            )
+        
+        participant = participant_response.data[0]
+        
+        # Allow if user is the participant or the host
+        is_participant = participant.get("user_id") and str(participant.get("user_id")) == str(current_user["id"])
+        is_host = str(meeting["host_id"]) == str(current_user["id"])
+        
+        if not (is_participant or is_host):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only mark your own calls as missed or if you are the host"
+            )
+        
+        result = await meeting_service.mark_call_as_missed(meeting_id, participant_id)
+        return result
+    except HTTPException:
+        raise
+    except AppException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to mark call as missed: {str(e)}",
+        )
