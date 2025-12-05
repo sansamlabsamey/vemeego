@@ -16,6 +16,7 @@ from gotrue.errors import AuthApiError
 from pydantic import ValidationError
 
 from app.core.config import settings
+from app.core.logger import log_warning
 from app.core.exceptions import (
     AuthenticationError,
     AuthorizationError,
@@ -145,7 +146,7 @@ class AuthService:
                     }
                 )
             except Exception as e:
-                print(f"Warning: Failed to send verification email: {e}")
+                log_warning(f"Failed to send verification email: {e}")
 
             return {
                 "user_id": user_update.data[0]["id"],
@@ -549,7 +550,7 @@ class AuthService:
                     }
                 )
             except Exception as e:
-                print(f"Warning: Failed to send approval email: {e}")
+                log_warning(f"Failed to send approval email: {e}")
 
             return {
                 "user_id": str(user_id),

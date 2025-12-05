@@ -10,6 +10,7 @@ from gotrue.errors import AuthApiError
 from supabase import Client, create_client
 
 from app.core.config import settings
+from app.core.logger import log_error
 
 
 def _is_valid_supabase_config() -> bool:
@@ -170,7 +171,7 @@ async def get_user_by_id(user_id: str) -> Optional[dict]:
             }
         return None
     except Exception as e:
-        print(f"Error fetching user: {e}")
+        log_error(f"Error fetching user: {e}")
         return None
 
 
@@ -190,5 +191,5 @@ async def update_user_metadata(user_id: str, metadata: dict) -> bool:
         admin_client.auth.admin.update_user_by_id(user_id, {"user_metadata": metadata})
         return True
     except Exception as e:
-        print(f"Error updating user metadata: {e}")
+        log_error(f"Error updating user metadata: {e}")
         return False

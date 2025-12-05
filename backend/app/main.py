@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.exceptions import AppException
+from app.core.logger import log_startup, log_info
 from app.routers import auth, messaging, organizations, storage, meetings
 
 
@@ -21,26 +22,26 @@ async def lifespan(app: FastAPI):
     Handles startup and shutdown events.
     """
     # Startup
-    print(f"🚀 Starting {settings.APP_NAME} v{settings.APP_VERSION}")
-    print(f"   Environment: {settings.ENVIRONMENT}")
+    log_startup(f"🚀 Starting {settings.APP_NAME} v{settings.APP_VERSION}")
+    log_startup(f"   Environment: {settings.ENVIRONMENT}")
 
     # Validate Supabase configuration
     if not settings.SUPABASE_URL or settings.SUPABASE_URL.startswith("https://your-project"):
-        print("\n⚠️  WARNING: Supabase credentials not configured!")
-        print("   Please update your .env file with actual Supabase credentials:")
-        print("   1. Go to your Supabase project dashboard")
-        print("   2. Click Settings -> API")
-        print("   3. Copy the following:")
-        print("      - Project URL -> SUPABASE_URL")
-        print("      - anon/public key -> SUPABASE_ANON_KEY")
-        print("      - service_role key -> SUPABASE_SERVICE_ROLE_KEY")
-        print("\n   The API will not work until these are set correctly.\n")
+        log_info("\n⚠️  WARNING: Supabase credentials not configured!")
+        log_info("   Please update your .env file with actual Supabase credentials:")
+        log_info("   1. Go to your Supabase project dashboard")
+        log_info("   2. Click Settings -> API")
+        log_info("   3. Copy the following:")
+        log_info("      - Project URL -> SUPABASE_URL")
+        log_info("      - anon/public key -> SUPABASE_ANON_KEY")
+        log_info("      - service_role key -> SUPABASE_SERVICE_ROLE_KEY")
+        log_info("\n   The API will not work until these are set correctly.\n")
     else:
-        print(f"   Supabase URL: {settings.SUPABASE_URL}")
+        log_info(f"   Supabase URL: {settings.SUPABASE_URL}")
 
     yield
     # Shutdown
-    print(f"👋 Shutting down {settings.APP_NAME}")
+    log_startup(f"👋 Shutting down {settings.APP_NAME}")
 
 
 # Create FastAPI application

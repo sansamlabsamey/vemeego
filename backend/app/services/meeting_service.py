@@ -17,6 +17,7 @@ from app.core.exceptions import (
 from app.core.supabase_client import get_admin_client
 
 from app.core.config import settings
+from app.core.logger import log_warning, log_debug
 
 class MeetingService:
     """Service class for meeting operations."""
@@ -108,7 +109,7 @@ class MeetingService:
             # If host participant insert fails, log but continue
             # The meeting was created successfully
             error_msg = str(e)
-            print(f"WARNING: Failed to add host as participant: {error_msg}")
+            log_warning(f"Failed to add host as participant: {error_msg}")
             # Try to continue - meeting is created, just participant record failed
             host_participant_data = None
 
@@ -142,7 +143,7 @@ class MeetingService:
                     # If participant insertion fails, log but continue
                     # The meeting was created successfully
                     error_msg = str(e)
-                    print(f"WARNING: Failed to add participants: {error_msg}")
+                    log_warning(f"Failed to add participants: {error_msg}")
                     # Continue without participants - meeting is still created
                     created_participants = []
 
@@ -247,8 +248,8 @@ class MeetingService:
             can_publish_data=can_publish_data,
         ))
         
-        print(f"DEBUG: Generated token for user {user_id} in room '{meeting['room_name']}'")
-        print(f"DEBUG: Grants - can_publish: {can_publish}, can_subscribe: {can_subscribe}, can_publish_data: {can_publish_data}")
+        log_debug(f"Generated token for user {user_id} in room '{meeting['room_name']}'")
+        log_debug(f"Grants - can_publish: {can_publish}, can_subscribe: {can_subscribe}, can_publish_data: {can_publish_data}")
 
         return token.to_jwt()
 
@@ -384,8 +385,8 @@ class MeetingService:
         # The client will publish it via room.localParticipant.publishData() after
         # receiving this response.
         
-        print(f"DEBUG: Message saved to database: {message['id']}")
-        print(f"DEBUG: Client should publish this message via LiveKit for E2EE rooms")
+        log_debug(f"Message saved to database: {message['id']}")
+        log_debug(f"Client should publish this message via LiveKit for E2EE rooms")
             
         return message
 
@@ -692,7 +693,7 @@ class MeetingService:
             except Exception as e:
                 # Log but don't fail if room deletion fails
                 # Room will be cleaned up automatically by LiveKit after inactivity
-                print(f"WARNING: Failed to close LiveKit room: {str(e)}")
+                log_warning(f"Failed to close LiveKit room: {str(e)}")
         
         # Clear meeting chat messages
         try:
@@ -701,7 +702,7 @@ class MeetingService:
                 .eq("meeting_id", str(meeting_id)) \
                 .execute()
         except Exception as e:
-            print(f"WARNING: Failed to clear chat messages: {str(e)}")
+            log_warning(f"Failed to clear chat messages: {str(e)}")
         
         # Update meeting status to completed
         update_data = {
@@ -822,7 +823,7 @@ class MeetingService:
             except Exception as e:
                 # Log but don't fail if room deletion fails
                 # Room will be cleaned up automatically by LiveKit after inactivity
-                print(f"WARNING: Failed to close LiveKit room: {str(e)}")
+                log_warning(f"Failed to close LiveKit room: {str(e)}")
         
         # Clear meeting chat messages (if any)
         try:
@@ -831,7 +832,7 @@ class MeetingService:
                 .eq("meeting_id", str(meeting_id)) \
                 .execute()
         except Exception as e:
-            print(f"WARNING: Failed to clear chat messages: {str(e)}")
+            log_warning(f"Failed to clear chat messages: {str(e)}")
         
         # Update meeting status to not_answered
         update_data = {
@@ -845,4 +846,4 @@ class MeetingService:
                 .eq("id", str(meeting_id)) \
                 .execute()
         except Exception as e:
-            print(f"WARNING: Failed to mark meeting as not_answered: {str(e)}")
+            log_warning(f"Failed to mark meeting as not_answered: {str(e)}")

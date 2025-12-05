@@ -20,7 +20,9 @@ class Settings(BaseSettings):
     # Application Info
     APP_NAME: str = "Vemeego"
     APP_VERSION: str = "1.0.0"
-    ENVIRONMENT: str = "development"
+    # Environment is loaded from .env file (ENVIRONMENT=development or ENVIRONMENT=production)
+    # Falls back to "production" if not set in .env (for security)
+    ENVIRONMENT: str = "production"
     LOG_LEVEL: str = "INFO"
 
     # API Configuration
@@ -37,10 +39,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str = ""
 
     # JWT Configuration
-    JWT_SECRET: str = "your-secret-key-change-in-production"
-    JWT_ALGORITHM: str = "HS256"
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+    # Note: JWT signing is handled automatically by Supabase Auth.
+    # Supabase uses its own JWT signing keys (managed in Supabase Dashboard).
+    # Tokens are validated using Supabase's get_user() method which verifies
+    # tokens against Supabase's JWKS endpoint.
+    # See: https://supabase.com/docs/guides/auth/signing-keys
 
     # LiveKit Configuration
     LIVEKIT_URL: str = ""

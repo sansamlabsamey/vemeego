@@ -14,6 +14,8 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.core.logger import log_warning, log_info
+
 security = HTTPBearer()
 
 from app.core.exceptions import (
@@ -127,13 +129,13 @@ async def signup_org_admin(signup_data: UserSignUp):
                         time.sleep(retry_delay)
             except Exception as e:
                 # Log the error but continue retrying
-                print(f"Attempt {attempt + 1} failed: {str(e)}")
+                log_warning(f"Attempt {attempt + 1} failed: {str(e)}")
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
 
         # If trigger didn't create the user, create it manually as fallback
         if not user_response or not user_response.data or len(user_response.data) == 0:
-            print("Trigger didn't create user, creating manually as fallback")
+            log_info("Trigger didn't create user, creating manually as fallback")
             try:
                 # Manually create user in public.users table
                 insert_response = (
@@ -185,7 +187,7 @@ async def signup_org_admin(signup_data: UserSignUp):
                 if update_response.data and len(update_response.data) > 0:
                     user_data = update_response.data[0]
             except Exception as e:
-                print(f"Warning: Failed to update phone number: {str(e)}")
+                log_warning(f"Failed to update phone number: {str(e)}")
 
         # Sign in the user to get tokens
         from app.core.supabase_client import get_client
@@ -208,7 +210,7 @@ async def signup_org_admin(signup_data: UserSignUp):
                     }
                 )
             except Exception as e:
-                print(f"Warning: Failed to send verification email: {str(e)}")
+                log_warning(f"Failed to send verification email: {str(e)}")
 
             return {
                 "message": "Signup successful. Please complete organization setup.",
@@ -224,7 +226,7 @@ async def signup_org_admin(signup_data: UserSignUp):
         except Exception as e:
             # If sign-in fails, still return success but without tokens
             # User can login manually
-            print(f"Warning: Auto sign-in failed: {str(e)}")
+            log_warning(f"Auto sign-in failed: {str(e)}")
             return {
                 "message": "Signup successful. Please login to continue.",
                 "user_id": user_data["id"],
@@ -387,11 +389,13 @@ async def signin(signin_data: UserSignIn, response: Response):
 
         # Set refresh token cookie if keep_me_signed_in is True
         if signin_data.keep_me_signed_in and result.get("refresh_token"):
+            from app.core.config import settings
+            
             response.set_cookie(
                 key="refresh_token",
                 value=result["refresh_token"],
                 httponly=True,
-                secure=True,  # Set to True in production (requires HTTPS)
+                secure=settings.is_production,  # Only require HTTPS in production
                 samesite="lax",
                 max_age=30 * 24 * 60 * 60,  # 30 days
             )
@@ -470,11 +474,13 @@ async def refresh_token(
         # If we used a cookie or if we want to maintain the session, update the cookie
         # This implements the sliding window (resets 30 days on every refresh)
         if using_cookie and result.get("refresh_token"):
-             response.set_cookie(
+            from app.core.config import settings
+            
+            response.set_cookie(
                 key="refresh_token",
                 value=result["refresh_token"],
                 httponly=True,
-                secure=True,
+                secure=settings.is_production,  # Only require HTTPS in production
                 samesite="lax",
                 max_age=30 * 24 * 60 * 60,  # 30 days
             )
@@ -706,7 +712,7 @@ async def get_current_user_info(current_user: dict = Depends(get_current_active_
             if org_response.data:
                 user_data["organization_name"] = org_response.data["name"]
         except Exception as e:
-            print(f"Warning: Failed to fetch organization name: {str(e)}")
+            log_warning(f"Failed to fetch organization name: {str(e)}")
             
     return UserWithOrganization(**user_data)
 
